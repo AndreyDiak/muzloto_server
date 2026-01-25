@@ -1,0 +1,1 @@
+export const REGISTRATION_REWARD = 10;
