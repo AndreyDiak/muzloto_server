@@ -1,8 +1,9 @@
-import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import eventsRouter from './routes/events';
+import express from 'express';
 import path from 'path';
+import eventsRouter from './routes/events';
+import transactionsRouter from './routes/transactions';
 
 // Загружаем переменные окружения
 const envPath = path.resolve(__dirname, '../.env');
@@ -28,6 +29,7 @@ app.use(express.json());
 
 // Роуты
 app.use('/api/events', eventsRouter);
+app.use('/api/transactions', transactionsRouter);
 
 // Health check
 app.get('/health', (req, res) => {
