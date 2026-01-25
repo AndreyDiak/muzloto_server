@@ -16,6 +16,45 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     const normalizedCode = code.toUpperCase();
 
+    // Тестовый код - всегда начисляем монеты без проверок
+    if (normalizedCode === '00000') {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('balance')
+        .eq('telegram_id', telegramId)
+        .single();
+
+      if (profileError || !profile) {
+        console.error('Failed to fetch profile:', profileError);
+        throw new Error(`Failed to fetch profile: ${profileError?.message || 'Profile not found'}`);
+      }
+
+      const oldBalance = profile.balance || 0;
+      const newBalance = oldBalance + REGISTRATION_REWARD;
+
+      const { data: _updatedProfile, error: updateBalanceError } = await supabase
+        .from('profiles')
+        .update({ balance: newBalance })
+        .eq('telegram_id', telegramId)
+        .select('balance')
+        .single();
+
+      if (updateBalanceError) {
+        throw new Error(`Failed to update balance: ${updateBalanceError.message}`);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Test code processed. You received 10 coins!',
+        event: {
+          id: 'test',
+          title: 'Тестовое событие',
+        },
+        newBalance,
+        coinsEarned: REGISTRATION_REWARD,
+      });
+    }
+
     // Ищем мероприятие по коду
     const { data: event, error: eventError } = await supabase
       .from('events')
@@ -86,6 +125,7 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
         title: event.title,
       },
       newBalance,
+      coinsEarned: REGISTRATION_REWARD
     });
   } catch (error: any) {
     console.error('Error processing event registration:', error);
