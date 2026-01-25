@@ -81,11 +81,6 @@ router.post('/process', verifyTelegramAuth, async (req: AuthRequest, res: Respon
       return res.status(410).json({ error: 'Токен истек.' });
     }
 
-    // Нельзя обработать свою собственную транзакцию
-    if (transactionData.telegramId === scannerTelegramId) {
-      return res.status(403).json({ error: 'Нельзя обработать свою собственную транзакцию.' });
-    }
-
     const { telegramId: targetTelegramId, amount, type } = transactionData;
 
     // Получаем профиль целевого пользователя
