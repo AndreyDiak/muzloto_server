@@ -2,8 +2,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
+import catalogRouter from './routes/catalog';
 import eventsRouter from './routes/events';
 import transactionsRouter from './routes/transactions';
+import scannerRouter from './routes/scanner';
 
 // Загружаем переменные окружения
 const envPath = path.resolve(__dirname, '../.env');
@@ -28,8 +30,10 @@ app.use(express.json());
 
 
 // Роуты
+app.use('/api/catalog', catalogRouter);
 app.use('/api/events', eventsRouter);
 app.use('/api/transactions', transactionsRouter);
+app.use('/api/scanner', scannerRouter);
 
 // Health check
 app.get('/health', (req, res) => {
