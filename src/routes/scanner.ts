@@ -46,16 +46,26 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
       return res.status(400).json({ error: 'Билет уже использован.' });
     }
 
+    // Supabase возвращает bigint как строку; для запроса к profiles используем строку, чтобы не терять точность
+    const ownerId = ticket.telegram_id != null ? String(ticket.telegram_id) : null;
     const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
-      supabase.from('profiles').select('telegram_id, username, first_name, last_name').eq('telegram_id', ticket.telegram_id).single(),
+      supabase.from('profiles').select('telegram_id, username, first_name, last_name').eq('telegram_id', ownerId).single(),
       supabase.from('catalog').select('id, name, description, price, photo').eq('id', ticket.catalog_item_id).single(),
     ]);
 
     if (profileError || !profile) {
-      return res.status(500).json({ error: 'Не удалось загрузить данные участника.' });
+      const details = profileError?.message;
+      return res.status(500).json({
+        error: 'Не удалось загрузить данные участника.',
+        ...(details && { details }),
+      });
     }
     if (itemError || !item) {
-      return res.status(500).json({ error: 'Не удалось загрузить данные предмета.' });
+      const details = itemError?.message;
+      return res.status(500).json({
+        error: 'Не удалось загрузить данные предмета.',
+        ...(details && { details }),
+      });
     }
 
     const { error: updateError } = await supabase
