@@ -25,7 +25,6 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
         .single();
 
       if (profileError || !profile) {
-        console.error('Failed to fetch profile:', profileError);
         throw new Error(`Failed to fetch profile: ${profileError?.message || 'Profile not found'}`);
       }
 
@@ -99,7 +98,6 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       .single();
 
     if (profileError || !profile) {
-      console.error('Failed to fetch profile:', profileError);
       throw new Error(`Failed to fetch profile: ${profileError?.message || 'Profile not found'}`);
     }
 
@@ -127,9 +125,9 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       newBalance,
       coinsEarned: REGISTRATION_REWARD
     });
-  } catch (error: any) {
-    console.error('Error processing event registration:', error);
-    res.status(500).json({ error: error?.message || 'Internal server error' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: message });
   }
 });
 

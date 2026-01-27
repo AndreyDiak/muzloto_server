@@ -49,7 +49,7 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
     // Supabase возвращает bigint как строку; для запроса к profiles используем строку, чтобы не терять точность
     const ownerId = ticket.telegram_id != null ? String(ticket.telegram_id) : null;
     const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
-      supabase.from('profiles').select('telegram_id, username, first_name, last_name').eq('telegram_id', ownerId).single(),
+      supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', ownerId).single(),
       supabase.from('catalog').select('id, name, description, price, photo').eq('id', ticket.catalog_item_id).single(),
     ]);
 
@@ -83,7 +83,7 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
         telegram_id: profile.telegram_id,
         username: profile.username ?? null,
         first_name: profile.first_name ?? null,
-        last_name: profile.last_name ?? null,
+        avatar_url: profile.avatar_url ?? null,
       },
       item: {
         id: item.id,

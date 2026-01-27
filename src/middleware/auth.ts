@@ -23,7 +23,6 @@ export async function verifyTelegramAuth(
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
-      console.error('Auth error:', error);
       return res.status(401).json({ error: 'Invalid token' });
     }
 
@@ -36,8 +35,7 @@ export async function verifyTelegramAuth(
 
     req.telegramId = telegramId;
     next();
-  } catch (error) {
-    console.error('Auth error:', error);
+  } catch {
     return res.status(401).json({ error: 'Authentication failed' });
   }
 }

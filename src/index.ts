@@ -4,7 +4,6 @@ import express from 'express';
 import path from 'path';
 import catalogRouter from './routes/catalog';
 import eventsRouter from './routes/events';
-import transactionsRouter from './routes/transactions';
 import scannerRouter from './routes/scanner';
 
 // Загружаем переменные окружения
@@ -32,7 +31,6 @@ app.use(express.json());
 // Роуты
 app.use('/api/catalog', catalogRouter);
 app.use('/api/events', eventsRouter);
-app.use('/api/transactions', transactionsRouter);
 app.use('/api/scanner', scannerRouter);
 
 // Health check
@@ -40,6 +38,4 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT);
