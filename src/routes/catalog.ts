@@ -1,6 +1,8 @@
 import { Response, Router } from 'express';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
+import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
+import { incrementUserStat } from '../services/user-stats';
 
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const CODE_LENGTH = 5;
@@ -78,6 +80,18 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
         .single();
 
       if (!insertError) {
+        await incrementUserStat(telegramId, 'tickets_purchased');
+        const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
+
+        let finalBalance = newBalance;
+        if (totalCoinReward > 0) {
+          finalBalance = newBalance + totalCoinReward;
+          await supabase
+            .from('profiles')
+            .update({ balance: finalBalance })
+            .eq('telegram_id', telegramId);
+        }
+
         return res.json({
           success: true,
           message: 'Покупка оформлена. Сохраните код билета.',
@@ -93,7 +107,9 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
             price: item.price,
             photo: item.photo ?? null,
           },
-          newBalance,
+          newBalance: finalBalance,
+          newlyUnlockedAchievements,
+          achievementCoinsEarned: totalCoinReward > 0 ? totalCoinReward : undefined,
         });
       }
 

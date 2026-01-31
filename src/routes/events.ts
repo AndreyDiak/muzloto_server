@@ -1,7 +1,9 @@
 import { Response, Router } from 'express';
 import { REGISTRATION_REWARD } from '../constants';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
+import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
+import { incrementUserStat } from '../services/user-stats';
 
 const router = Router();
 
@@ -42,6 +44,18 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
         throw new Error(`Failed to update balance: ${updateBalanceError.message}`);
       }
 
+      await incrementUserStat(telegramId, 'games_visited');
+      const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
+
+      let finalBalance = newBalance;
+      if (totalCoinReward > 0) {
+        finalBalance = newBalance + totalCoinReward;
+        await supabase
+          .from('profiles')
+          .update({ balance: finalBalance })
+          .eq('telegram_id', telegramId);
+      }
+
       return res.json({
         success: true,
         message: 'Test code processed. You received 10 coins!',
@@ -49,8 +63,9 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
           id: 'test',
           title: 'Тестовое событие',
         },
-        newBalance,
-        coinsEarned: REGISTRATION_REWARD,
+        newBalance: finalBalance,
+        coinsEarned: REGISTRATION_REWARD + totalCoinReward,
+        newlyUnlockedAchievements,
       });
     }
 
@@ -115,6 +130,18 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       throw new Error(`Failed to update balance: ${updateBalanceError.message}`);
     }
 
+    await incrementUserStat(telegramId, 'games_visited');
+    const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
+
+    let finalBalance = newBalance;
+    if (totalCoinReward > 0) {
+      finalBalance = newBalance + totalCoinReward;
+      await supabase
+        .from('profiles')
+        .update({ balance: finalBalance })
+        .eq('telegram_id', telegramId);
+    }
+
     res.json({
       success: true,
       message: 'Successfully registered for event and received 10 coins!',
@@ -122,8 +149,9 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
         id: event.id,
         title: event.title,
       },
-      newBalance,
-      coinsEarned: REGISTRATION_REWARD
+      newBalance: finalBalance,
+      coinsEarned: REGISTRATION_REWARD + totalCoinReward,
+      newlyUnlockedAchievements,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Internal server error';
