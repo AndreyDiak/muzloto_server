@@ -1,7 +1,10 @@
+import { getAchievementCoinReward } from './rewards';
+
 /**
  * Конфиг достижений: пороговые значения и описания.
  * statKey — поле в user_stats, по которому проверяем условие.
  * threshold — минимальное значение для разблокировки.
+ * Награды монетами берутся из config/rewards.ts по ключам.
  */
 export type AchievementStatKey = 'games_visited' | 'tickets_purchased' | 'bingo_collected';
 
@@ -20,11 +23,11 @@ export interface AchievementDefinition {
   statKey: AchievementStatKey;
   /** Минимальное значение для разблокировки */
   threshold: number;
-  /** Награда монетами при разблокировке (опционально) */
+  /** Награда монетами при разблокировке (из config/rewards) */
   coinReward?: number;
 }
 
-export const ACHIEVEMENTS: AchievementDefinition[] = [
+const DEFS: Omit<AchievementDefinition, 'coinReward'>[] = [
   {
     slug: 'first_verse',
     badge: '🥉',
@@ -42,7 +45,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Уже не оглядываешься на экран — ловишь бит.',
     statKey: 'games_visited',
     threshold: 5,
-    coinReward: 15,
   },
   {
     slug: 'chorus_going',
@@ -61,7 +63,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Момент, когда стиль уже есть, а голос — узнают.',
     statKey: 'games_visited',
     threshold: 25,
-    coinReward: 50,
   },
   {
     slug: 'final_chorus',
@@ -80,9 +81,7 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Твой голос — часть истории.',
     statKey: 'games_visited',
     threshold: 100,
-    coinReward: 100,
   },
-  // По количеству купленных билетов
   {
     slug: 'has_ticket',
     badge: '🥉',
@@ -100,7 +99,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Когда одного микрофона уже мало.',
     statKey: 'tickets_purchased',
     threshold: 5,
-    coinReward: 50
   },
   {
     slug: 'karaoke_magnate',
@@ -111,7 +109,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     statKey: 'tickets_purchased',
     threshold: 10,
   },
-  // По победам в бинго
   {
     slug: 'first_bingo',
     badge: '🥉',
@@ -129,7 +126,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Кажется, это уже не случайность.',
     statKey: 'bingo_collected',
     threshold: 3,
-    coinReward: 25
   },
   {
     slug: 'bingo_sense',
@@ -148,7 +144,6 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     label: 'Когда удача слушает тебя.',
     statKey: 'bingo_collected',
     threshold: 10,
-    coinReward: 50
   },
   {
     slug: 'bingo_legend',
@@ -160,3 +155,9 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     threshold: 25,
   },
 ];
+
+/** Достижения с наградами из config/rewards.ts (по slug) */
+export const ACHIEVEMENTS: AchievementDefinition[] = DEFS.map((d) => ({
+  ...d,
+  coinReward: getAchievementCoinReward(d.slug),
+}));

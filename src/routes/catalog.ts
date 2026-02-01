@@ -1,4 +1,5 @@
 import { Response, Router } from 'express';
+import { getCatalogItemPrice } from '../config/rewards';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
@@ -6,6 +7,16 @@ import { incrementUserStat } from '../services/user-stats';
 
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const CODE_LENGTH = 5;
+
+interface CatalogRow {
+  id: string;
+  name: string;
+  description: string | null;
+  price: number;
+  photo: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 function generateTicketCode(): string {
   const bytes = new Uint8Array(CODE_LENGTH);
@@ -18,6 +29,30 @@ function generateTicketCode(): string {
 }
 
 const router = Router();
+
+/** Список каталога: данные из БД, цены из config/rewards (единый источник правды для цен). */
+router.get('/', async (_req, res: Response) => {
+  try {
+    const { data: rows, error } = await supabase
+      .from('catalog')
+      .select('id, name, description, price, photo, created_at, updated_at')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const items = (rows ?? []).map((item: CatalogRow) => ({
+      ...item,
+      price: getCatalogItemPrice(item.id) ?? Number(item.price),
+    }));
+
+    res.json({ items });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Ошибка при загрузке каталога';
+    res.status(500).json({ error: message });
+  }
+});
 
 router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -38,7 +73,7 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       return res.status(404).json({ error: 'Товар не найден.' });
     }
 
-    const price = Number(item.price);
+    const price = getCatalogItemPrice(catalog_item_id) ?? Number(item.price);
     
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
@@ -104,7 +139,7 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
             id: item.id,
             name: item.name,
             description: item.description ?? null,
-            price: item.price,
+            price,
             photo: item.photo ?? null,
           },
           newBalance: finalBalance,

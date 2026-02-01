@@ -1,4 +1,4 @@
-import { ACHIEVEMENTS, type AchievementDefinition } from '../config/achievements';
+import { ACHIEVEMENTS } from '../config/achievements';
 import { supabase } from './supabase';
 
 export interface NewlyUnlockedAchievement {
@@ -48,7 +48,9 @@ export async function checkAndUnlockAchievements(
 
   for (const ach of ACHIEVEMENTS) {
     const value = statsMap[ach.statKey];
-    if (value < ach.threshold) continue;
+    if (value < ach.threshold) {
+      continue
+    }
 
     const { error: insertError } = await supabase
       .from('user_achievements')
@@ -59,6 +61,7 @@ export async function checkAndUnlockAchievements(
       });
 
     if (insertError) {
+      // 409 conflict error
       if (insertError.code === '23505') {
         continue;
       }
@@ -66,7 +69,9 @@ export async function checkAndUnlockAchievements(
     }
 
     const reward = ach.coinReward ?? 0;
-    if (reward > 0) totalCoinReward += reward;
+    if (reward > 0) {
+      totalCoinReward += reward;
+    }
 
     newlyUnlocked.push({
       slug: ach.slug,
