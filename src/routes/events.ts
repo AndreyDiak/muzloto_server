@@ -35,17 +35,11 @@ async function applyVisitReward(telegramId: number): Promise<VisitRewardResult> 
   }
 
   await incrementUserStat(telegramId, 'games_visited');
-  const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
-
-  let finalBalance = newBalance;
-  if (totalCoinReward > 0) {
-    finalBalance = newBalance + totalCoinReward;
-    await supabase.from('profiles').update({ balance: finalBalance }).eq('telegram_id', telegramId);
-  }
+  const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
 
   return {
-    finalBalance,
-    coinsEarned: REGISTRATION_REWARD + totalCoinReward,
+    finalBalance: newBalance,
+    coinsEarned: REGISTRATION_REWARD,
     newlyUnlockedAchievements,
   };
 }

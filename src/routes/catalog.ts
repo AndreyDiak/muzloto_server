@@ -116,16 +116,7 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
       if (!insertError) {
         await incrementUserStat(telegramId, 'tickets_purchased');
-        const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
-
-        let finalBalance = newBalance;
-        if (totalCoinReward > 0) {
-          finalBalance = newBalance + totalCoinReward;
-          await supabase
-            .from('profiles')
-            .update({ balance: finalBalance })
-            .eq('telegram_id', telegramId);
-        }
+        const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
 
         return res.json({
           success: true,
@@ -142,9 +133,8 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
             price,
             photo: item.photo ?? null,
           },
-          newBalance: finalBalance,
+          newBalance,
           newlyUnlockedAchievements,
-          achievementCoinsEarned: totalCoinReward > 0 ? totalCoinReward : undefined,
         });
       }
 

@@ -57,22 +57,13 @@ router.post('/claim', verifyTelegramAuth, async (req: AuthRequest, res: Response
     }
 
     await incrementUserStat(telegramId, 'bingo_collected');
-    const { newlyUnlocked: newlyUnlockedAchievements, totalCoinReward } = await checkAndUnlockAchievements(telegramId);
-
-    let finalBalance = newBalance;
-    if (totalCoinReward > 0) {
-      finalBalance = newBalance + totalCoinReward;
-      await supabase
-        .from('profiles')
-        .update({ balance: finalBalance })
-        .eq('telegram_id', telegramId);
-    }
+    const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
 
     res.json({
       success: true,
       message: 'Победа в бинго засчитана! Вам начислены монеты.',
-      newBalance: finalBalance,
-      coinsEarned: BINGO_REWARD + totalCoinReward,
+      newBalance,
+      coinsEarned: BINGO_REWARD,
       newlyUnlockedAchievements,
     });
   } catch (error: unknown) {
