@@ -5,6 +5,28 @@ export interface AuthRequest extends Request {
   telegramId?: number;
 }
 
+export async function requireRoot(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const telegramId = req.telegramId!;
+    const { data } = await supabase
+      .from('root_user_tags')
+      .select('telegram_id')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+    if (!data) {
+      res.status(403).json({ error: 'Доступ только для мастер-аккаунтов.' });
+      return;
+    }
+    next();
+  } catch (e) {
+    next(e);
+  }
+}
+
 export async function verifyTelegramAuth(
   req: AuthRequest,
   res: Response,

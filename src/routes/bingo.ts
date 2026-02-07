@@ -28,7 +28,26 @@ router.post('/claim', verifyTelegramAuth, async (req: AuthRequest, res: Response
       return res.status(400).json({ error: 'Код бинго должен начинаться с буквы B.' });
     }
 
-    if (normalizedCode !== BINGO_TEST_CODE) {
+    let coinsToAdd = BINGO_REWARD;
+
+    const { data: prizeCode, error: prizeError } = await supabase
+      .from('event_prize_codes')
+      .select('id, coins_amount')
+      .eq('code', normalizedCode)
+      .is('used_at', null)
+      .maybeSingle();
+
+    if (!prizeError && prizeCode) {
+      coinsToAdd = prizeCode.coins_amount;
+      const { error: markUsedError } = await supabase
+        .from('event_prize_codes')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', prizeCode.id);
+
+      if (markUsedError) {
+        throw new Error(`Failed to mark prize code as used: ${markUsedError.message}`);
+      }
+    } else if (normalizedCode !== BINGO_TEST_CODE) {
       return res.status(404).json({ error: 'Код бинго не найден или уже использован.' });
     }
 
@@ -43,7 +62,7 @@ router.post('/claim', verifyTelegramAuth, async (req: AuthRequest, res: Response
     }
 
     const oldBalance = profile.balance || 0;
-    const newBalance = oldBalance + BINGO_REWARD;
+    const newBalance = oldBalance + coinsToAdd;
 
     const { error: updateBalanceError } = await supabase
       .from('profiles')
@@ -63,7 +82,7 @@ router.post('/claim', verifyTelegramAuth, async (req: AuthRequest, res: Response
       success: true,
       message: 'Победа в бинго засчитана! Вам начислены монеты.',
       newBalance,
-      coinsEarned: BINGO_REWARD,
+      coinsEarned: coinsToAdd,
       newlyUnlockedAchievements,
     });
   } catch (error: unknown) {
