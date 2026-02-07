@@ -39,11 +39,34 @@ async function fetchProfileMap(telegramIds: number[]): Promise<Map<string, Profi
   return map;
 }
 
+interface PrizeCodeInfo {
+  telegram_id: number | null;
+  used_at: string | null;
+}
+
 function buildPersonalResponse(
   slot: { telegram_id: number | null; prize_code: string | null },
   profileMap: Map<string, ProfileBrief>,
+  prizeCodeMap: Map<string, PrizeCodeInfo>,
 ) {
-  if (slot.prize_code) return { code: slot.prize_code };
+  if (slot.prize_code) {
+    const prizeInfo = prizeCodeMap.get(slot.prize_code);
+    const redeemed = prizeInfo?.telegram_id != null;
+    const redeemerProfile = redeemed ? profileMap.get(String(prizeInfo!.telegram_id)) : null;
+    return {
+      code: slot.prize_code,
+      redeemed,
+      redeemed_at: prizeInfo?.used_at ?? null,
+      redeemed_by: redeemed
+        ? {
+            telegram_id: prizeInfo!.telegram_id,
+            first_name: redeemerProfile?.first_name ?? null,
+            username: redeemerProfile?.username ?? null,
+            avatar_url: redeemerProfile?.avatar_url ?? null,
+          }
+        : null,
+    };
+  }
   if (slot.telegram_id == null) return null;
   const p = profileMap.get(String(slot.telegram_id));
   return {
@@ -327,12 +350,31 @@ router.get(
         }
       }
 
-      const telegramIds = personal
-        .map((s) => s.telegram_id)
-        .filter((id): id is number => id != null);
+      // Собираем все prize_code из слотов для поиска информации о погашении
+      const prizeCodes = personal
+        .map((s) => s.prize_code)
+        .filter((c): c is string => c != null);
 
-      const profileMap = await fetchProfileMap(telegramIds);
-      const personalResponse = personal.map((slot) => buildPersonalResponse(slot, profileMap));
+      const prizeCodeMap = new Map<string, PrizeCodeInfo>();
+      if (prizeCodes.length > 0) {
+        const { data: prizeRows } = await supabase
+          .from('event_prize_codes')
+          .select('code, telegram_id, used_at')
+          .in('code', prizeCodes);
+        for (const pr of prizeRows ?? []) {
+          prizeCodeMap.set(pr.code, { telegram_id: pr.telegram_id, used_at: pr.used_at });
+        }
+      }
+
+      // Собираем telegram_id победителей + telegram_id тех, кто погасил коды
+      const telegramIds = [
+        ...personal.map((s) => s.telegram_id).filter((id): id is number => id != null),
+        ...[...prizeCodeMap.values()].map((v) => v.telegram_id).filter((id): id is number => id != null),
+      ];
+      const uniqueTelegramIds = [...new Set(telegramIds)];
+
+      const profileMap = await fetchProfileMap(uniqueTelegramIds);
+      const personalResponse = personal.map((slot) => buildPersonalResponse(slot, profileMap, prizeCodeMap));
 
       res.json({ personal: personalResponse, team });
     } catch (error: unknown) {

@@ -41,7 +41,7 @@ router.post('/claim', verifyTelegramAuth, async (req: AuthRequest, res: Response
       coinsToAdd = prizeCode.coins_amount;
       const { error: markUsedError } = await supabase
         .from('event_prize_codes')
-        .update({ used_at: new Date().toISOString() })
+        .update({ used_at: new Date().toISOString(), telegram_id: telegramId })
         .eq('id', prizeCode.id);
 
       if (markUsedError) {
