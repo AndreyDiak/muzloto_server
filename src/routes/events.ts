@@ -8,6 +8,54 @@ import { incrementUserStat } from '../services/user-stats';
 
 const router = Router();
 
+const PERSONAL_SLOTS = 4;
+const TEAM_SLOTS = 3;
+
+interface BingoWinnerRow {
+  slot_type: string;
+  slot_index: number;
+  telegram_id: number | null;
+  team_name: string | null;
+  prize_code: string | null;
+}
+
+interface ProfileBrief {
+  telegram_id: number;
+  first_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+}
+
+async function fetchProfileMap(telegramIds: number[]): Promise<Map<string, ProfileBrief>> {
+  const map = new Map<string, ProfileBrief>();
+  if (telegramIds.length === 0) return map;
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('telegram_id, first_name, username, avatar_url')
+    .in('telegram_id', telegramIds);
+  for (const p of profiles ?? []) {
+    map.set(String(p.telegram_id), p as ProfileBrief);
+  }
+  return map;
+}
+
+function buildPersonalResponse(
+  slot: { telegram_id: number | null; prize_code: string | null },
+  profileMap: Map<string, ProfileBrief>,
+) {
+  if (slot.prize_code) return { code: slot.prize_code };
+  if (slot.telegram_id == null) return null;
+  const p = profileMap.get(String(slot.telegram_id));
+  return {
+    telegram_id: slot.telegram_id,
+    first_name: p?.first_name ?? null,
+    username: p?.username ?? null,
+    avatar_url: p?.avatar_url ?? null,
+    registered_at: '',
+    status: '',
+  };
+}
+
 interface VisitRewardResult {
   finalBalance: number;
   coinsEarned: number;
@@ -115,7 +163,10 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 });
 
 const REWARD_TYPES: Record<string, number> = {
-  personal_bingo: REWARDS_CONFIG.bingo_rewards.personal_bingo,
+  personal_bingo_horizontal: REWARDS_CONFIG.bingo_rewards.personal.horizontal,
+  personal_bingo_vertical: REWARDS_CONFIG.bingo_rewards.personal.vertical,
+  personal_bingo_diagonal: REWARDS_CONFIG.bingo_rewards.personal.diagonal,
+  personal_bingo_full_card: REWARDS_CONFIG.bingo_rewards.personal.full_card,
   team_bingo: REWARDS_CONFIG.bingo_rewards.team_bingo,
 };
 
@@ -203,7 +254,12 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const { eventId } = req.params;
+      const { reward_type } = req.body ?? {};
       const { BINGO_REWARD } = await import('../constants');
+      const coinsAmount =
+        typeof reward_type === 'string' && reward_type in REWARD_TYPES
+          ? REWARD_TYPES[reward_type]
+          : BINGO_REWARD;
       const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       const randomPart = () => {
         let s = 'B';
@@ -224,7 +280,7 @@ router.post(
         .insert({
           event_id: eventId,
           code,
-          coins_amount: BINGO_REWARD,
+          coins_amount: coinsAmount,
           created_by_telegram_id: req.telegramId!,
         })
         .select('code, id, created_at')
@@ -252,50 +308,33 @@ router.get(
       const { eventId } = req.params;
       const { data: rows, error } = await supabase
         .from('event_bingo_winners')
-        .select('slot_type, slot_index, telegram_id, team_name')
+        .select('slot_type, slot_index, telegram_id, team_name, prize_code')
         .eq('event_id', eventId);
 
-      if (error) {
-        throw new Error(error.message);
-      }
+      if (error) throw new Error(error.message);
 
-      const personal: (number | null)[] = [null, null, null, null];
-      const team: (string | null)[] = [null, null, null];
-      (rows ?? []).forEach((r: { slot_type: string; slot_index: number; telegram_id: number | null; team_name: string | null }) => {
-        if (r.slot_type === 'personal' && r.slot_index >= 0 && r.slot_index < 4) {
-          personal[r.slot_index] = r.telegram_id;
-        }
-        if (r.slot_type === 'team' && r.slot_index >= 0 && r.slot_index < 3) {
+      const personal = Array.from({ length: PERSONAL_SLOTS }, () => ({
+        telegram_id: null as number | null,
+        prize_code: null as string | null,
+      }));
+      const team: (string | null)[] = Array(TEAM_SLOTS).fill(null);
+
+      for (const r of (rows ?? []) as BingoWinnerRow[]) {
+        if (r.slot_type === 'personal' && r.slot_index >= 0 && r.slot_index < PERSONAL_SLOTS) {
+          personal[r.slot_index] = { telegram_id: r.telegram_id, prize_code: r.prize_code };
+        } else if (r.slot_type === 'team' && r.slot_index >= 0 && r.slot_index < TEAM_SLOTS) {
           team[r.slot_index] = r.team_name;
         }
-      });
-
-      const telegramIds = personal.filter((id): id is number => id != null);
-      let profileByTgId = new Map<string, { telegram_id: number; first_name: string | null; username: string | null; avatar_url: string | null }>();
-      if (telegramIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('telegram_id, first_name, username, avatar_url')
-          .in('telegram_id', telegramIds);
-        (profiles ?? []).forEach((p) => profileByTgId.set(String(p.telegram_id), p));
       }
 
-      const personalWithProfile = personal.map((tgId) => {
-        if (tgId == null) return null;
-        const p = profileByTgId.get(String(tgId));
-        return p
-          ? {
-              telegram_id: tgId,
-              first_name: p.first_name,
-              username: p.username,
-              avatar_url: p.avatar_url,
-              registered_at: '',
-              status: '',
-            }
-          : { telegram_id: tgId, first_name: null, username: null, avatar_url: null, registered_at: '', status: '' };
-      });
+      const telegramIds = personal
+        .map((s) => s.telegram_id)
+        .filter((id): id is number => id != null);
 
-      res.json({ personal: personalWithProfile, team });
+      const profileMap = await fetchProfileMap(telegramIds);
+      const personalResponse = personal.map((slot) => buildPersonalResponse(slot, profileMap));
+
+      res.json({ personal: personalResponse, team });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Internal server error';
       res.status(500).json({ error: message });
@@ -312,18 +351,20 @@ router.put(
     try {
       const { eventId } = req.params;
       const { personal, team } = req.body as {
-        personal?: (number | null)[];
+        personal?: (number | null | { code: string })[];
         team?: (string | null)[];
       };
 
-      const toUpsert: { event_id: string; slot_type: string; slot_index: number; telegram_id?: number | null; team_name?: string | null }[] = [];
-      (personal ?? []).slice(0, 4).forEach((telegram_id, slot_index) => {
+      const toUpsert: { event_id: string; slot_type: string; slot_index: number; telegram_id?: number | null; team_name?: string | null; prize_code?: string | null }[] = [];
+      (personal ?? []).slice(0, 4).forEach((item, slot_index) => {
+        const isCode = item != null && typeof item === 'object' && 'code' in item;
         toUpsert.push({
           event_id: eventId,
           slot_type: 'personal',
           slot_index,
-          telegram_id: telegram_id ?? null,
+          telegram_id: isCode ? null : (typeof item === 'number' ? item : null),
           team_name: null,
+          prize_code: isCode && typeof (item as { code?: string }).code === 'string' ? (item as { code: string }).code : null,
         });
       });
       (team ?? []).slice(0, 3).forEach((team_name, slot_index) => {

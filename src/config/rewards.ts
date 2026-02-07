@@ -19,7 +19,12 @@ export const REWARDS_CONFIG = {
   },
 
   bingo_rewards: {
-    personal_bingo: 75,
+    personal: {
+      horizontal: 75,
+      vertical: 75,
+      diagonal: 75,
+      full_card: 100,
+    },
     team_bingo: 150,
   },
 
