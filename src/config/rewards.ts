@@ -25,7 +25,11 @@ export const REWARDS_CONFIG = {
       diagonal: 75,
       full_card: 100,
     },
-    team_bingo: 150,
+    team: {
+      horizontal: 150,
+      vertical: 150,
+      full_card: 150,
+    },
   },
 
   visit_rewards: {

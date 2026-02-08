@@ -16,6 +16,7 @@ interface BingoWinnerRow {
   slot_index: number;
   telegram_id: number | null;
   team_name: string | null;
+  team_id: string | null;
   prize_code: string | null;
 }
 
@@ -116,9 +117,106 @@ async function applyVisitReward(telegramId: number): Promise<VisitRewardResult> 
   };
 }
 
-router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+/** GET /api/events/my-registration — текущая регистрация пользователя (последняя по дате) */
+router.get('/my-registration', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const telegramId = req.telegramId!;
+
+    const { data: reg, error: regError } = await supabase
+      .from('registrations')
+      .select('event_id, team_id, registered_at')
+      .eq('telegram_id', telegramId)
+      .order('registered_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (regError) throw new Error(regError.message);
+    if (!reg) {
+      return res.json({ registration: null });
+    }
+
+    // Параллельно: событие + команда (если есть)
+    const [eventResult, teamResult] = await Promise.all([
+      supabase.from('events').select('id, title').eq('id', reg.event_id).single(),
+      reg.team_id
+        ? supabase.from('event_teams').select('id, name').eq('id', reg.team_id).single()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    res.json({
+      registration: {
+        event: eventResult.data ? { id: eventResult.data.id, title: eventResult.data.title } : null,
+        team: teamResult.data ? { id: teamResult.data.id, name: teamResult.data.name } : null,
+        registered_at: reg.registered_at,
+      },
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/** POST /api/events/validate-code — проверить код мероприятия и вернуть информацию + команды */
+router.post('/validate-code', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { code } = req.body;
+    const telegramId = req.telegramId!;
+
+    if (!code || typeof code !== 'string' || code.length !== 5) {
+      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 символов.' });
+    }
+
+    const normalizedCode = code.toUpperCase();
+
+    if (normalizedCode === '00000') {
+      return res.json({
+        event: { id: 'test', title: 'Тестовое событие' },
+        teams: [],
+        alreadyRegistered: false,
+        coinsReward: REGISTRATION_REWARD,
+      });
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from('events')
+      .select('id, title, code')
+      .eq('code', normalizedCode)
+      .single();
+
+    if (eventError || !event) {
+      return res.status(404).json({ error: 'Мероприятие не найдено.' });
+    }
+
+    const [{ data: existingRegistration }, { data: teams }] = await Promise.all([
+      supabase
+        .from('registrations')
+        .select('id')
+        .eq('event_id', event.id)
+        .eq('telegram_id', telegramId)
+        .maybeSingle(),
+      supabase
+        .from('event_teams')
+        .select('id, name')
+        .eq('event_id', event.id)
+        .order('name'),
+    ]);
+
+    res.json({
+      event: { id: event.id, title: event.title },
+      teams: (teams ?? []).map((t) => ({ id: t.id, name: t.name })),
+      alreadyRegistered: !!existingRegistration,
+      coinsReward: REGISTRATION_REWARD,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/** POST /api/events/register — зарегистрироваться на мероприятие (с выбором команды) */
+router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { code, team_id } = req.body as { code?: string; team_id?: string };
     const telegramId = req.telegramId!;
 
     if (!code || typeof code !== 'string' || code.length !== 5) {
@@ -160,10 +258,24 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       return res.status(409).json({ error: 'Вы уже зарегистрированы на это мероприятие.' });
     }
 
+    // Если у мероприятия есть команды, team_id обязателен
+    if (team_id) {
+      const { data: teamRow } = await supabase
+        .from('event_teams')
+        .select('id')
+        .eq('id', team_id)
+        .eq('event_id', event.id)
+        .maybeSingle();
+      if (!teamRow) {
+        return res.status(400).json({ error: 'Указанная команда не найдена для этого мероприятия.' });
+      }
+    }
+
     const { error: registrationError } = await supabase.from('registrations').insert({
       event_id: event.id,
       telegram_id: telegramId,
       status: 'confirmed',
+      ...(team_id ? { team_id } : {}),
     });
 
     if (registrationError) {
@@ -190,7 +302,9 @@ const REWARD_TYPES: Record<string, number> = {
   personal_bingo_vertical: REWARDS_CONFIG.bingo_rewards.personal.vertical,
   personal_bingo_diagonal: REWARDS_CONFIG.bingo_rewards.personal.diagonal,
   personal_bingo_full_card: REWARDS_CONFIG.bingo_rewards.personal.full_card,
-  team_bingo: REWARDS_CONFIG.bingo_rewards.team_bingo,
+  team_bingo_horizontal: REWARDS_CONFIG.bingo_rewards.team.horizontal,
+  team_bingo_vertical: REWARDS_CONFIG.bingo_rewards.team.vertical,
+  team_bingo_full_card: REWARDS_CONFIG.bingo_rewards.team.full_card,
 };
 
 /** POST /api/events/award-coins — начислить монеты участнику мероприятия (только root) */
@@ -269,6 +383,66 @@ router.post(
   }
 );
 
+/** GET /api/events/:eventId/teams — список команд мероприятия (только root) */
+router.get(
+  '/:eventId/teams',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { data: teams, error } = await supabase
+        .from('event_teams')
+        .select('id, name')
+        .eq('event_id', eventId)
+        .order('name');
+
+      if (error) throw new Error(error.message);
+      res.json({ teams: teams ?? [] });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** POST /api/events/:eventId/teams — создать команду для мероприятия (только root) */
+router.post(
+  '/:eventId/teams',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { name } = req.body as { name?: string };
+
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'Укажите название команды.' });
+      }
+
+      const trimmedName = name.trim();
+
+      const { data: inserted, error } = await supabase
+        .from('event_teams')
+        .insert({ event_id: eventId, name: trimmedName })
+        .select('id, name')
+        .single();
+
+      if (error) {
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'Команда с таким названием уже существует.' });
+        }
+        throw new Error(error.message);
+      }
+
+      res.status(201).json({ team: inserted });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
 /** POST /api/events/:eventId/prize-codes — сгенерировать код приза за бинго (только root) */
 router.post(
   '/:eventId/prize-codes',
@@ -331,7 +505,7 @@ router.get(
       const { eventId } = req.params;
       const { data: rows, error } = await supabase
         .from('event_bingo_winners')
-        .select('slot_type, slot_index, telegram_id, team_name, prize_code')
+        .select('slot_type, slot_index, telegram_id, team_name, team_id, prize_code')
         .eq('event_id', eventId);
 
       if (error) throw new Error(error.message);
@@ -340,20 +514,40 @@ router.get(
         telegram_id: null as number | null,
         prize_code: null as string | null,
       }));
-      const team: (string | null)[] = Array(TEAM_SLOTS).fill(null);
+      const teamRaw = Array.from({ length: TEAM_SLOTS }, () => ({
+        team_id: null as string | null,
+        team_name: null as string | null,
+        prize_code: null as string | null,
+      }));
 
+      // Собираем team_id для резолва имён команд
+      const teamIds: string[] = [];
       for (const r of (rows ?? []) as BingoWinnerRow[]) {
         if (r.slot_type === 'personal' && r.slot_index >= 0 && r.slot_index < PERSONAL_SLOTS) {
           personal[r.slot_index] = { telegram_id: r.telegram_id, prize_code: r.prize_code };
         } else if (r.slot_type === 'team' && r.slot_index >= 0 && r.slot_index < TEAM_SLOTS) {
-          team[r.slot_index] = r.team_name;
+          if (r.team_id) teamIds.push(r.team_id);
+          teamRaw[r.slot_index] = { team_id: r.team_id, team_name: r.team_name, prize_code: r.prize_code };
         }
       }
 
-      // Собираем все prize_code из слотов для поиска информации о погашении
-      const prizeCodes = personal
-        .map((s) => s.prize_code)
-        .filter((c): c is string => c != null);
+      // Резолвим имена команд по team_id
+      const teamNameMap = new Map<string, string>();
+      if (teamIds.length > 0) {
+        const { data: teamRows } = await supabase
+          .from('event_teams')
+          .select('id, name')
+          .in('id', teamIds);
+        for (const t of teamRows ?? []) {
+          teamNameMap.set(t.id, t.name);
+        }
+      }
+
+      // Собираем все prize_code из слотов (personal + team) для поиска информации о погашении
+      const prizeCodes = [
+        ...personal.map((s) => s.prize_code),
+        ...teamRaw.map((s) => s.prize_code),
+      ].filter((c): c is string => c != null);
 
       const prizeCodeMap = new Map<string, PrizeCodeInfo>();
       if (prizeCodes.length > 0) {
@@ -376,7 +570,36 @@ router.get(
       const profileMap = await fetchProfileMap(uniqueTelegramIds);
       const personalResponse = personal.map((slot) => buildPersonalResponse(slot, profileMap, prizeCodeMap));
 
-      res.json({ personal: personalResponse, team });
+      // Формируем team response: команда, код, или null
+      const teamResponse = teamRaw.map((slot) => {
+        if (slot.prize_code) {
+          const prizeInfo = prizeCodeMap.get(slot.prize_code);
+          const redeemed = prizeInfo?.telegram_id != null;
+          const redeemerProfile = redeemed ? profileMap.get(String(prizeInfo!.telegram_id)) : null;
+          return {
+            code: slot.prize_code,
+            redeemed,
+            redeemed_at: prizeInfo?.used_at ?? null,
+            redeemed_by: redeemed
+              ? {
+                  telegram_id: prizeInfo!.telegram_id,
+                  first_name: redeemerProfile?.first_name ?? null,
+                  username: redeemerProfile?.username ?? null,
+                  avatar_url: redeemerProfile?.avatar_url ?? null,
+                }
+              : null,
+          };
+        }
+        if (slot.team_id) {
+          return { id: slot.team_id, name: teamNameMap.get(slot.team_id) ?? slot.team_name ?? '' };
+        }
+        if (slot.team_name) {
+          return { id: '', name: slot.team_name };
+        }
+        return null;
+      });
+
+      res.json({ personal: personalResponse, team: teamResponse });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Internal server error';
       res.status(500).json({ error: message });
@@ -394,10 +617,10 @@ router.put(
       const { eventId } = req.params;
       const { personal, team } = req.body as {
         personal?: (number | null | { code: string })[];
-        team?: (string | null)[];
+        team?: ({ id: string; name: string } | { code: string } | string | null)[];
       };
 
-      const toUpsert: { event_id: string; slot_type: string; slot_index: number; telegram_id?: number | null; team_name?: string | null; prize_code?: string | null }[] = [];
+      const toUpsert: { event_id: string; slot_type: string; slot_index: number; telegram_id?: number | null; team_name?: string | null; team_id?: string | null; prize_code?: string | null }[] = [];
       (personal ?? []).slice(0, 4).forEach((item, slot_index) => {
         const isCode = item != null && typeof item === 'object' && 'code' in item;
         toUpsert.push({
@@ -406,16 +629,21 @@ router.put(
           slot_index,
           telegram_id: isCode ? null : (typeof item === 'number' ? item : null),
           team_name: null,
+          team_id: null,
           prize_code: isCode && typeof (item as { code?: string }).code === 'string' ? (item as { code: string }).code : null,
         });
       });
-      (team ?? []).slice(0, 3).forEach((team_name, slot_index) => {
+      (team ?? []).slice(0, 3).forEach((item, slot_index) => {
+        const isCode = item != null && typeof item === 'object' && 'code' in item && !('id' in item);
+        const isTeamObj = item != null && typeof item === 'object' && 'id' in item;
         toUpsert.push({
           event_id: eventId,
           slot_type: 'team',
           slot_index,
           telegram_id: null,
-          team_name: team_name?.trim() || null,
+          team_id: isTeamObj ? (item as { id: string }).id || null : null,
+          team_name: isTeamObj ? (item as { name: string }).name?.trim() || null : (typeof item === 'string' ? item.trim() || null : null),
+          prize_code: isCode ? (item as { code: string }).code : null,
         });
       });
 
@@ -445,7 +673,7 @@ router.get(
       const { eventId } = req.params;
       const { data: regs, error: regError } = await supabase
         .from('registrations')
-        .select('telegram_id, registered_at, status')
+        .select('telegram_id, registered_at, status, team_id')
         .eq('event_id', eventId)
         .order('registered_at', { ascending: false });
 
@@ -457,11 +685,19 @@ router.get(
         return res.json({ registrations: [] });
       }
 
+      // Параллельно: профили + команды
       const telegramIds = [...new Set(regs.map((r) => String(r.telegram_id)))];
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('telegram_id, first_name, username, avatar_url')
-        .in('telegram_id', telegramIds);
+      const teamIds = [...new Set(regs.map((r) => r.team_id).filter((id): id is string => !!id))];
+
+      const [{ data: profiles, error: profilesError }, teamResult] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('telegram_id, first_name, username, avatar_url')
+          .in('telegram_id', telegramIds),
+        teamIds.length > 0
+          ? supabase.from('event_teams').select('id, name').in('id', teamIds)
+          : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      ]);
 
       if (profilesError) {
         throw new Error(profilesError.message);
@@ -469,6 +705,9 @@ router.get(
 
       const profileByTgId = new Map(
         (profiles ?? []).map((p) => [String(p.telegram_id), p])
+      );
+      const teamById = new Map(
+        ((teamResult as { data: { id: string; name: string }[] }).data ?? []).map((t) => [t.id, t.name])
       );
 
       const registrations = regs.map((r) => ({
@@ -478,6 +717,7 @@ router.get(
         first_name: profileByTgId.get(String(r.telegram_id))?.first_name ?? null,
         username: profileByTgId.get(String(r.telegram_id))?.username ?? null,
         avatar_url: profileByTgId.get(String(r.telegram_id))?.avatar_url ?? null,
+        team: r.team_id ? { id: r.team_id, name: teamById.get(r.team_id) ?? null } : null,
       }));
 
       res.json({ registrations });
