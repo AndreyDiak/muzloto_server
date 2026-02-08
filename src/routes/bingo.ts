@@ -1,11 +1,48 @@
-import { Response, Router } from 'express';
+import { Request, Response, Router } from 'express';
 import { BINGO_REWARD } from '../constants';
+import { REWARDS_CONFIG } from '../config/rewards';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
+
+const PERSONAL_SLOT_DEFS = [
+  { slug: 'horizontal', rewardType: 'personal_bingo_horizontal', icon: 'MoveHorizontal' },
+  { slug: 'vertical', rewardType: 'personal_bingo_vertical', icon: 'MoveVertical' },
+  { slug: 'diagonal', rewardType: 'personal_bingo_diagonal', icon: 'MoveUpRight' },
+  { slug: 'full_card', rewardType: 'personal_bingo_full_card', icon: 'LayoutGrid' },
+] as const;
+
+const TEAM_SLOT_DEFS = [
+  { slug: 'horizontal', rewardType: 'team_bingo_horizontal', icon: 'MoveHorizontal' },
+  { slug: 'vertical', rewardType: 'team_bingo_vertical', icon: 'MoveVertical' },
+  { slug: 'full_card', rewardType: 'team_bingo_full_card', icon: 'LayoutGrid' },
+] as const;
+
+const LABELS: Record<string, string> = {
+  horizontal: 'Горизонталь',
+  vertical: 'Вертикаль',
+  diagonal: 'Диагональ',
+  full_card: 'Весь бланк',
+};
+
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
 import { incrementUserStat } from '../services/user-stats';
 
 const router = Router();
+
+/** GET /api/bingo/config — настройки слотов бинго с наградами из конфига */
+router.get('/config', (_req: Request, res: Response) => {
+  const personal = PERSONAL_SLOT_DEFS.map((s) => ({
+    ...s,
+    label: LABELS[s.slug],
+    coins: REWARDS_CONFIG.bingo_rewards.personal[s.slug],
+  }));
+  const team = TEAM_SLOT_DEFS.map((s) => ({
+    ...s,
+    label: LABELS[s.slug],
+    coins: REWARDS_CONFIG.bingo_rewards.team[s.slug as 'horizontal' | 'vertical' | 'full_card'],
+  }));
+  res.json({ personal, team });
+});
 
 /** Код бинго всегда начинается с B (5 символов: B + 4 буквы/цифры). */
 const BINGO_CODE_PREFIX = 'B';

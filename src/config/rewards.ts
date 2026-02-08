@@ -26,8 +26,8 @@ export const REWARDS_CONFIG = {
       full_card: 100,
     },
     team: {
-      horizontal: 150,
-      vertical: 150,
+      horizontal: 125,
+      vertical: 125,
       full_card: 150,
     },
   },

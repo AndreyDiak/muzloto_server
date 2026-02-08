@@ -383,11 +383,113 @@ router.post(
   }
 );
 
-/** GET /api/events/:eventId/teams — список команд мероприятия (только root) */
+const TEAM_REWARD_TYPES = ['team_bingo_horizontal', 'team_bingo_vertical', 'team_bingo_full_card'];
+
+/** POST /api/events/award-team-coins — начислить монеты всем участникам команды поровну (только root) */
+router.post(
+  '/award-team-coins',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { event_id, team_id, reward_type } = req.body as {
+        event_id?: string;
+        team_id?: string;
+        reward_type?: string;
+      };
+
+      if (!event_id || !team_id) {
+        return res.status(400).json({
+          error: 'Укажите event_id и team_id.',
+        });
+      }
+
+      if (!reward_type || !TEAM_REWARD_TYPES.includes(reward_type) || !(reward_type in REWARD_TYPES)) {
+        return res.status(400).json({
+          error: 'Укажите reward_type: team_bingo_horizontal, team_bingo_vertical или team_bingo_full_card.',
+        });
+      }
+
+      const amount = REWARD_TYPES[reward_type] as number;
+
+      const { data: regs, error: regsError } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', event_id)
+        .eq('team_id', team_id);
+
+      if (regsError) throw new Error(regsError.message);
+
+      const members = (regs ?? []).map((r) => r.telegram_id);
+      if (members.length === 0) {
+        return res.status(404).json({
+          error: 'В команде нет зарегистрированных участников.',
+        });
+      }
+
+      const perMember = Math.floor(amount / members.length);
+
+      for (const telegramId of members) {
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('balance')
+          .eq('telegram_id', telegramId)
+          .single();
+
+        if (profileError || !profile) continue;
+
+        const newBalance = (profile.balance ?? 0) + perMember;
+        await supabase
+          .from('profiles')
+          .update({ balance: newBalance })
+          .eq('telegram_id', telegramId);
+      }
+
+      const { data: existingStats } = await supabase
+        .from('event_team_stats')
+        .select('id, total_coins_earned, bingo_wins_count')
+        .eq('event_id', event_id)
+        .eq('team_id', team_id)
+        .maybeSingle();
+
+      const now = new Date().toISOString();
+      if (existingStats) {
+        await supabase
+          .from('event_team_stats')
+          .update({
+            total_coins_earned: existingStats.total_coins_earned + amount,
+            bingo_wins_count: existingStats.bingo_wins_count + 1,
+            updated_at: now,
+          })
+          .eq('event_id', event_id)
+          .eq('team_id', team_id);
+      } else {
+        await supabase.from('event_team_stats').insert({
+          event_id,
+          team_id,
+          total_coins_earned: amount,
+          bingo_wins_count: 1,
+          updated_at: now,
+        });
+      }
+
+      res.json({
+        success: true,
+        amount,
+        membersCount: members.length,
+        perMember,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** GET /api/events/:eventId/teams — список команд мероприятия (все участники) */
 router.get(
   '/:eventId/teams',
   verifyTelegramAuth,
-  requireRoot,
   async (req: AuthRequest, res: Response) => {
     try {
       const { eventId } = req.params;
@@ -495,11 +597,10 @@ router.post(
   }
 );
 
-/** GET /api/events/:eventId/bingo-winners — сохранённые победители бинго (только root) */
+/** GET /api/events/:eventId/bingo-winners — сохранённые победители бинго (все участники) */
 router.get(
   '/:eventId/bingo-winners',
   verifyTelegramAuth,
-  requireRoot,
   async (req: AuthRequest, res: Response) => {
     try {
       const { eventId } = req.params;
