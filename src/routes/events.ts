@@ -4,6 +4,7 @@ import { REGISTRATION_REWARD } from '../constants';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
+import { sendTelegramMessage } from '../services/telegram';
 import { incrementUserStat } from '../services/user-stats';
 
 const router = Router();
@@ -283,6 +284,11 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
     }
 
     const result = await applyVisitReward(telegramId);
+
+    // Личное сообщение в Telegram о регистрации (не блокируем ответ)
+    const tgText = `Привет! Записал тебя на <b>«${event.title}»</b> — отрывайся как хочешь :) 😊\n\nЗа регистрацию начислил ${REGISTRATION_REWARD} монет — заглядывай в приложение, там можно тратить их в магазине.`;
+    void sendTelegramMessage(telegramId, tgText).catch(() => {});
+
     res.json({
       success: true,
       message: `Вы зарегистрированы на мероприятие. Начислено ${REGISTRATION_REWARD} монет!`,
