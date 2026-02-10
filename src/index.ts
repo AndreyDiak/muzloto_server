@@ -10,14 +10,16 @@ import eventsRouter from './routes/events';
 import scannerRouter from './routes/scanner';
 import telegramWebhookRouter from './routes/telegram-webhook';
 
-// Загружаем переменные окружения
-const envPath = path.resolve(__dirname, '../.env');
-const result = dotenv.config({ path: envPath });
-
-if (result.error) {
-  console.error('Failed to load .env file:', result.error.message);
-  // Пробуем загрузить из process.cwd()
-  dotenv.config();
+// На Vercel переменные задаются в настройках проекта, файла .env нет
+if (process.env.VERCEL !== '1') {
+  const envPath = path.resolve(__dirname, '../.env');
+  const result = dotenv.config({ path: envPath });
+  if (result.error && result.error.code !== 'ENOENT') {
+    console.error('Failed to load .env file:', result.error.message);
+  }
+  if (result.error?.code === 'ENOENT') {
+    dotenv.config(); // fallback: из process.cwd()
+  }
 }
 
 const app = express();
