@@ -30,14 +30,12 @@ interface TelegramUpdate {
 
 const router = Router();
 
-router.post('/webhook', (req: Request, res: Response) => {
-  // Отвечаем 200 сразу, чтобы Telegram не повторял запрос
-  res.sendStatus(200);
-
+router.post('/webhook', async (req: Request, res: Response) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   const headerSecret = req.header('X-Telegram-Bot-Api-Secret-Token');
   if (secret?.trim() && headerSecret !== secret) {
     console.warn('[telegram-webhook] Секрет не совпадает или не передан. Задайте secret_token в setWebhook или уберите TELEGRAM_WEBHOOK_SECRET.');
+    res.sendStatus(200);
     return;
   }
 
@@ -47,12 +45,15 @@ router.post('/webhook', (req: Request, res: Response) => {
     if (body?.message) {
       console.log('[telegram-webhook] Игнор: не личное сообщение, chat.type=', body.message.chat?.type);
     }
+    res.sendStatus(200);
     return;
   }
 
   const text = message.text ?? message.caption ?? '[медиа]';
   console.log('[telegram-webhook] ЛС от', message.from.id, message.from.username ?? '-', ':', text.slice(0, 50));
-  void sendFormattedMessageToAdmin(
+
+  // На Vercel функция завершается после ответа — дожидаемся пересылки и ответа, потом отдаём 200
+  await sendFormattedMessageToAdmin(
     {
       id: message.from.id,
       username: message.from.username,
@@ -61,7 +62,9 @@ router.post('/webhook', (req: Request, res: Response) => {
     },
     text
   );
-  void sendTelegramMessage(message.chat.id, DEFAULT_REPLY);
+  await sendTelegramMessage(message.chat.id, DEFAULT_REPLY);
+
+  res.sendStatus(200);
 });
 
 export default router;
