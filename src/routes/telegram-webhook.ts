@@ -12,7 +12,10 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { sendFormattedMessageToAdmin } from '../services/telegram';
+import { sendFormattedMessageToAdmin, sendTelegramMessage } from '../services/telegram';
+
+const DEFAULT_REPLY = `Организаторы свяжутся с вами в ближайшее время!
+Предлагаю вам открыть наше приложение и посмотреть изучить Афишу :)`;
 
 /** Минимальный тип для входящего Update от Telegram */
 interface TelegramUpdate {
@@ -52,6 +55,7 @@ router.post('/webhook', (req: Request, res: Response) => {
     },
     text
   );
+  void sendTelegramMessage(message.chat.id, DEFAULT_REPLY);
 });
 
 export default router;
