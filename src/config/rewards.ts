@@ -33,30 +33,27 @@ export const REWARDS_CONFIG = {
   },
 
   visit_rewards: {
-    per_visit: 5,
+    per_visit: 250,
   },
 
   /** Награды за достижения по slug (из config/achievements) */
   achievement_rewards: {
-    first_verse: 5,
-    in_rhythm: 10,
-    chorus_going: 20,
-    bridge: 40,
-    final_chorus: 70,
-    karaoke_legend: 100,
-    has_ticket: 2,
-    buying_for_friends: 10,
-    karaoke_magnate: 30,
-    first_bingo: 10,
-    bingo_sense: 20,
-    bingo_master: 40,
-    bingo_legend: 70,
+    visit_1: 1_000,
+    visit_5: 5_000,
+    visit_10: 10_000,
+    visit_25: 25_000,
+    visit_50: 50_000,
+    visit_100: 100_000,
+    shop_3: 3_000,
+    shop_5: 5_000,
+    shop_10: 10_000,
   } as const,
 
   shop: {
     items: [
       { id: 'extra_card', name: 'Дополнительный бланк', price: 25 },
       { id: 'free_ticket', name: 'Бесплатный билет', price: 100 },
+
     ],
   },
 

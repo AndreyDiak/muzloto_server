@@ -2,6 +2,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
+import adminRouter from './routes/admin';
 import achievementsRouter from './routes/achievements';
 import bingoRouter from './routes/bingo';
 import catalogRouter from './routes/catalog';
@@ -31,6 +32,7 @@ app.use(express.json());
 
 
 // Роуты
+app.use('/api/admin', adminRouter);
 app.use('/api/achievements', achievementsRouter);
 app.use('/api/bingo', bingoRouter);
 app.use('/api/catalog', catalogRouter);

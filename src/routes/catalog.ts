@@ -36,7 +36,7 @@ router.get('/', async (_req, res: Response) => {
     const { data: rows, error } = await supabase
       .from('catalog')
       .select('id, name, description, price, photo, created_at, updated_at')
-      .order('created_at', { ascending: false });
+      .order('price', { ascending: true });
 
     if (error) {
       throw new Error(error.message);
