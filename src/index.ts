@@ -8,6 +8,7 @@ import bingoRouter from './routes/bingo';
 import catalogRouter from './routes/catalog';
 import eventsRouter from './routes/events';
 import scannerRouter from './routes/scanner';
+import telegramWebhookRouter from './routes/telegram-webhook';
 
 // Загружаем переменные окружения
 const envPath = path.resolve(__dirname, '../.env');
@@ -38,6 +39,7 @@ app.use('/api/bingo', bingoRouter);
 app.use('/api/catalog', catalogRouter);
 app.use('/api/events', eventsRouter);
 app.use('/api/scanner', scannerRouter);
+app.use('/api/telegram', telegramWebhookRouter);
 
 // Health check
 app.get('/health', (req, res) => {
