@@ -35,17 +35,23 @@ router.post('/webhook', (req: Request, res: Response) => {
   res.sendStatus(200);
 
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret?.trim() && req.header('X-Telegram-Bot-Api-Secret-Token') !== secret) {
+  const headerSecret = req.header('X-Telegram-Bot-Api-Secret-Token');
+  if (secret?.trim() && headerSecret !== secret) {
+    console.warn('[telegram-webhook] Секрет не совпадает или не передан. Задайте secret_token в setWebhook или уберите TELEGRAM_WEBHOOK_SECRET.');
     return;
   }
 
   const body = req.body as TelegramUpdate;
   const message = body?.message;
   if (!message || message.chat?.type !== 'private' || !message.from) {
+    if (body?.message) {
+      console.log('[telegram-webhook] Игнор: не личное сообщение, chat.type=', body.message.chat?.type);
+    }
     return;
   }
 
   const text = message.text ?? message.caption ?? '[медиа]';
+  console.log('[telegram-webhook] ЛС от', message.from.id, message.from.username ?? '-', ':', text.slice(0, 50));
   void sendFormattedMessageToAdmin(
     {
       id: message.from.id,

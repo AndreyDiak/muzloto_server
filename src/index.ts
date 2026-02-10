@@ -46,4 +46,9 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT);
+// На Vercel приложение отдаётся как serverless-функция из api/index.ts
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT);
+}
+
+export default app;
