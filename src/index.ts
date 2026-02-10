@@ -14,10 +14,11 @@ import telegramWebhookRouter from './routes/telegram-webhook';
 if (process.env.VERCEL !== '1') {
   const envPath = path.resolve(__dirname, '../.env');
   const result = dotenv.config({ path: envPath });
-  if (result.error && result.error.code !== 'ENOENT') {
-    console.error('Failed to load .env file:', result.error.message);
+  const err = result.error as NodeJS.ErrnoException | undefined;
+  if (err && err.code !== 'ENOENT') {
+    console.error('Failed to load .env file:', err.message);
   }
-  if (result.error?.code === 'ENOENT') {
+  if (err?.code === 'ENOENT') {
     dotenv.config(); // fallback: из process.cwd()
   }
 }
