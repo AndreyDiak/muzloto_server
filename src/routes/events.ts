@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { Response, Router } from 'express';
 import { REWARDS_CONFIG } from '../config/rewards';
 import { REGISTRATION_REWARD } from '../constants';
@@ -828,6 +829,274 @@ router.get(
       }));
 
       res.json({ registrations });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** GET /api/events/:eventId/raffle — получить победителя розыгрыша (если уже проведён), только root */
+router.get(
+  '/:eventId/raffle',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { data: row, error } = await supabase
+        .from('event_raffle_winners')
+        .select('winner_telegram_id, drawn_at')
+        .eq('event_id', eventId)
+        .maybeSingle();
+
+      if (error) throw new Error(error.message);
+      if (!row) return res.json({ winner: null });
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('telegram_id, first_name, username, avatar_url')
+        .eq('telegram_id', row.winner_telegram_id)
+        .single();
+
+      if (profileError || !profile) {
+        return res.json({
+          winner: {
+            telegram_id: row.winner_telegram_id,
+            first_name: null,
+            username: null,
+            avatar_url: null,
+          },
+          drawn_at: row.drawn_at,
+        });
+      }
+
+      res.json({
+        winner: {
+          telegram_id: profile.telegram_id,
+          first_name: profile.first_name ?? null,
+          username: profile.username ?? null,
+          avatar_url: profile.avatar_url ?? null,
+        },
+        drawn_at: row.drawn_at,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** POST /api/events/:eventId/raffle/roll — выдать случайного победителя без сохранения (реролл), только root */
+router.post(
+  '/:eventId/raffle/roll',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+
+      const { data: regs, error: regError } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId);
+
+      if (regError) throw new Error(regError.message);
+      if (!regs?.length) {
+        return res.status(400).json({ error: 'Нет участников для розыгрыша' });
+      }
+
+      const winnerIndex = randomInt(0, regs.length);
+      const winnerTelegramId = regs[winnerIndex].telegram_id;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('telegram_id, first_name, username, avatar_url')
+        .eq('telegram_id', winnerTelegramId)
+        .single();
+
+      const winnerPayload = profile
+        ? {
+            telegram_id: profile.telegram_id,
+            first_name: profile.first_name ?? null,
+            username: profile.username ?? null,
+            avatar_url: profile.avatar_url ?? null,
+          }
+        : {
+            telegram_id: winnerTelegramId,
+            first_name: null,
+            username: null,
+            avatar_url: null,
+          };
+
+      res.json({ winner: winnerPayload });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** POST /api/events/:eventId/raffle/confirm — сохранить победителя розыгрыша, только root */
+router.post(
+  '/:eventId/raffle/confirm',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const winnerTelegramId = req.body?.winner_telegram_id;
+      if (winnerTelegramId == null || typeof winnerTelegramId !== 'number') {
+        return res.status(400).json({ error: 'Нужен winner_telegram_id' });
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('event_raffle_winners')
+        .select('winner_telegram_id')
+        .eq('event_id', eventId)
+        .maybeSingle();
+
+      if (existingError) throw new Error(existingError.message);
+      if (existing) {
+        return res.status(409).json({ error: 'Розыгрыш уже проведён' });
+      }
+
+      const { data: regs, error: regError } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId);
+
+      if (regError) throw new Error(regError.message);
+      const inRegs = regs?.some((r) => r.telegram_id === winnerTelegramId);
+      if (!inRegs) {
+        return res.status(400).json({ error: 'Участник не найден в регистрациях' });
+      }
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('event_raffle_winners')
+        .insert({ event_id: eventId, winner_telegram_id: winnerTelegramId })
+        .select('drawn_at')
+        .single();
+
+      if (insertError) throw new Error(insertError.message);
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('telegram_id, first_name, username, avatar_url')
+        .eq('telegram_id', winnerTelegramId)
+        .single();
+
+      const winnerPayload = profile
+        ? {
+            telegram_id: profile.telegram_id,
+            first_name: profile.first_name ?? null,
+            username: profile.username ?? null,
+            avatar_url: profile.avatar_url ?? null,
+          }
+        : {
+            telegram_id: winnerTelegramId,
+            first_name: null,
+            username: null,
+            avatar_url: null,
+          };
+
+      res.status(201).json({
+        winner: winnerPayload,
+        drawn_at: inserted?.drawn_at ?? new Date().toISOString(),
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/** POST /api/events/:eventId/raffle — провести розыгрыш (один победитель) и сразу сохранить, только root */
+router.post(
+  '/:eventId/raffle',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+
+      const { data: existing, error: existingError } = await supabase
+        .from('event_raffle_winners')
+        .select('winner_telegram_id, drawn_at')
+        .eq('event_id', eventId)
+        .maybeSingle();
+
+      if (existingError) throw new Error(existingError.message);
+      if (existing) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('telegram_id, first_name, username, avatar_url')
+          .eq('telegram_id', existing.winner_telegram_id)
+          .single();
+        return res.status(409).json({
+          error: 'Розыгрыш уже проведён',
+          winner: profile
+            ? {
+                telegram_id: profile.telegram_id,
+                first_name: profile.first_name ?? null,
+                username: profile.username ?? null,
+                avatar_url: profile.avatar_url ?? null,
+              }
+            : {
+                telegram_id: existing.winner_telegram_id,
+                first_name: null,
+                username: null,
+                avatar_url: null,
+              },
+          drawn_at: existing.drawn_at,
+        });
+      }
+
+      const { data: regs, error: regError } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId);
+
+      if (regError) throw new Error(regError.message);
+      if (!regs?.length) {
+        return res.status(400).json({ error: 'Нет участников для розыгрыша' });
+      }
+
+      const winnerIndex = randomInt(0, regs.length);
+      const winnerTelegramId = regs[winnerIndex].telegram_id;
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('event_raffle_winners')
+        .insert({ event_id: eventId, winner_telegram_id: winnerTelegramId })
+        .select('drawn_at')
+        .single();
+
+      if (insertError) throw new Error(insertError.message);
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('telegram_id, first_name, username, avatar_url')
+        .eq('telegram_id', winnerTelegramId)
+        .single();
+
+      const winnerPayload = profile
+        ? {
+            telegram_id: profile.telegram_id,
+            first_name: profile.first_name ?? null,
+            username: profile.username ?? null,
+            avatar_url: profile.avatar_url ?? null,
+          }
+        : {
+            telegram_id: winnerTelegramId,
+            first_name: null,
+            username: null,
+            avatar_url: null,
+          };
+
+      res.status(201).json({
+        winner: winnerPayload,
+        drawn_at: inserted?.drawn_at ?? new Date().toISOString(),
+      });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Internal server error';
       res.status(500).json({ error: message });
