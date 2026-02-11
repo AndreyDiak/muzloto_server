@@ -10,5 +10,5 @@ export const VISIT_REWARD_EVERY = 5;
 /** Монеты за награду за посещения (начисляются при нажатии «Забрать» после каждых VISIT_REWARD_EVERY посещений) */
 export const VISIT_REWARD_COINS = 10_000;
 
-/** Монеты за регистрацию на мероприятие (сейчас не начисляются) */
-export const REGISTRATION_REWARD = 0;
+/** Монеты за регистрацию на мероприятие (начисляются при подтверждении в модалке) */
+export const REGISTRATION_REWARD = 1000;
