@@ -3,6 +3,7 @@ import { getCatalogItemPrice } from '../config/rewards';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
+import { sendTelegramMessage, escapeHtml } from '../services/telegram';
 import { incrementUserStat } from '../services/user-stats';
 
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -113,51 +114,29 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       throw new Error(`Не удалось списать монеты: ${updateError.message}`);
     }
 
-    let code = generateTicketCode();
-    const maxAttempts = 10;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const { data: ticket, error: insertError } = await supabase
-        .from('tickets')
-        .insert({
-          telegram_id: telegramId,
-          catalog_item_id: item.id,
-          code,
-        })
-        .select('id, code, created_at')
-        .single();
+    const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
 
-      if (!insertError) {
-        await incrementUserStat(telegramId, 'tickets_purchased');
-        const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
+    // Отправляем сообщение ботом с информацией о покупке
+    const messageText = `✅ Покупка оформлена!\n\n` +
+      `Товар: <b>${escapeHtml(item.name)}</b>\n` +
+      `Цена: ${price} монет\n` +
+      `Остаток монет: ${newBalance}`;
+    
+    await sendTelegramMessage(telegramId, messageText);
 
-        return res.json({
-          success: true,
-          message: 'Покупка оформлена. Сохраните код билета.',
-          ticket: {
-            id: ticket.id,
-            code: ticket.code,
-            created_at: ticket.created_at,
-          },
-          item: {
-            id: item.id,
-            name: item.name,
-            description: item.description ?? null,
-            price,
-            photo: item.photo ?? null,
-          },
-          newBalance,
-          newlyUnlockedAchievements,
-        });
-      }
-
-      if (insertError.code === '23505') {
-        code = generateTicketCode();
-        continue;
-      }
-      throw new Error(insertError.message);
-    }
-
-    throw new Error('Не удалось сгенерировать уникальный код билета.');
+    return res.json({
+      success: true,
+      message: 'Покупка оформлена.',
+      item: {
+        id: item.id,
+        name: item.name,
+        description: item.description ?? null,
+        price,
+        photo: item.photo ?? null,
+      },
+      newBalance,
+      newlyUnlockedAchievements,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Ошибка при покупке';
     res.status(500).json({ error: message });
