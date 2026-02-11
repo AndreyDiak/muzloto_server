@@ -4,7 +4,6 @@ import express from 'express';
 import path from 'path';
 import adminRouter from './routes/admin';
 import achievementsRouter from './routes/achievements';
-import bingoRouter from './routes/bingo';
 import catalogRouter from './routes/catalog';
 import eventsRouter from './routes/events';
 import scannerRouter from './routes/scanner';
@@ -38,7 +37,6 @@ app.use(express.json());
 // Роуты
 app.use('/api/admin', adminRouter);
 app.use('/api/achievements', achievementsRouter);
-app.use('/api/bingo', bingoRouter);
 app.use('/api/catalog', catalogRouter);
 app.use('/api/events', eventsRouter);
 app.use('/api/scanner', scannerRouter);

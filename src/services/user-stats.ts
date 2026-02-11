@@ -1,5 +1,7 @@
-import type { AchievementStatKey } from '../config/achievements';
 import { supabase } from './supabase';
+
+/** Ключи счётчиков в user_stats (для RPC increment_user_stat) */
+type AchievementStatKey = 'games_visited' | 'tickets_purchased' | 'bingo_collected';
 
 /**
  * Увеличивает счётчик пользователя на 1.

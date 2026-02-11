@@ -11,11 +11,11 @@
  *   С секретом: .../setWebhook?url=...&secret_token=<TELEGRAM_WEBHOOK_SECRET>
  */
 
-import { Router, Request, Response } from 'express';
+import { Request, Response, Router } from 'express';
 import { sendFormattedMessageToAdmin, sendTelegramMessage } from '../services/telegram';
 
 const DEFAULT_REPLY = `Организаторы свяжутся с вами в ближайшее время!
-Предлагаю вам открыть наше приложение и посмотреть изучить Афишу :)`;
+А пока вы ждете, предлагаю открыть наше приложение и посмотреть Афишу :)`;
 
 /** Минимальный тип для входящего Update от Telegram */
 interface TelegramUpdate {

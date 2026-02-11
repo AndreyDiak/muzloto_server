@@ -1,7 +1,14 @@
-import { getVisitReward } from './config/rewards';
-
-/** Монеты за регистрацию на мероприятие (из config/rewards) */
-export const REGISTRATION_REWARD = getVisitReward();
-
-/** Монеты за одно собранное бинго (пока из константы; при необходимости вынести в config/rewards) */
+/** Монеты за одно собранное бинго (не используется после удаления бинго) */
 export const BINGO_REWARD = 100;
+
+/** Монеты победителю розыгрыша при подтверждении (начисляются на баланс + сообщение в ЛС) */
+export const RAFFLE_WINNER_COINS = 5000;
+
+/** Каждые N посещений — награда (кнопка «Забрать» в профиле) */
+export const VISIT_REWARD_EVERY = 5;
+
+/** Монеты за награду за посещения (начисляются при нажатии «Забрать» после каждых VISIT_REWARD_EVERY посещений) */
+export const VISIT_REWARD_COINS = 10_000;
+
+/** Монеты за регистрацию на мероприятие (сейчас не начисляются) */
+export const REGISTRATION_REWARD = 0;

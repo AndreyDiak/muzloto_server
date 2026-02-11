@@ -9,21 +9,11 @@ router.use(verifyTelegramAuth);
 router.use(requireRoot);
 
 const EVENT_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const PRIZE_CODE_PREFIX = 'B';
-const PRIZE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function generateEventCode(): string {
   let s = '';
   for (let i = 0; i < 5; i++) {
     s += EVENT_CODE_CHARS[Math.floor(Math.random() * EVENT_CODE_CHARS.length)];
-  }
-  return s;
-}
-
-function generatePrizeCode(): string {
-  let s = PRIZE_CODE_PREFIX;
-  for (let i = 0; i < 4; i++) {
-    s += PRIZE_CODE_CHARS[Math.floor(Math.random() * PRIZE_CODE_CHARS.length)];
   }
   return s;
 }
@@ -164,59 +154,6 @@ router.delete('/catalog/:id', async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка удаления';
-    res.status(500).json({ error: message });
-  }
-});
-
-/** GET /api/admin/prize-codes — список сертификатных кодов (event_id is null) */
-router.get('/prize-codes', async (_req: AuthRequest, res: Response) => {
-  try {
-    const { data, error } = await supabase
-      .from('event_prize_codes')
-      .select('id, code, coins_amount, used_at, created_at')
-      .is('event_id', null)
-      .order('created_at', { ascending: false });
-
-    if (error) throw new Error(error.message);
-    res.json({ codes: data ?? [] });
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : 'Ошибка загрузки';
-    res.status(500).json({ error: message });
-  }
-});
-
-/** POST /api/admin/prize-codes — сгенерировать сертификатный код (сумма вручную) */
-router.post('/prize-codes', async (req: AuthRequest, res: Response) => {
-  try {
-    const { coins_amount } = req.body as { coins_amount?: number };
-
-    const amount = typeof coins_amount === 'number' && coins_amount >= 1 ? Math.floor(coins_amount) : 100;
-
-    let code = generatePrizeCode();
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const [{ data: existingPrize }, { data: existingTicket }] = await Promise.all([
-        supabase.from('event_prize_codes').select('id').eq('code', code).maybeSingle(),
-        supabase.from('tickets').select('id').eq('code', code).maybeSingle(),
-      ]);
-      if (!existingPrize && !existingTicket) break;
-      code = generatePrizeCode();
-    }
-
-    const { data: inserted, error } = await supabase
-      .from('event_prize_codes')
-      .insert({
-        event_id: null,
-        code,
-        coins_amount: amount,
-        created_by_telegram_id: req.telegramId!,
-      })
-      .select('id, code, coins_amount, created_at')
-      .single();
-
-    if (error) throw new Error(error.message);
-    res.status(201).json(inserted);
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : 'Ошибка генерации кода';
     res.status(500).json({ error: message });
   }
 });

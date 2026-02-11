@@ -1,5 +1,4 @@
 import { Response, Router } from 'express';
-import { getCatalogItemPrice } from '../config/rewards';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
@@ -30,7 +29,7 @@ function generatePurchaseCode(): string {
 
 const router = Router();
 
-/** Список каталога: данные из БД, цены из config/rewards (единый источник правды для цен). */
+/** Список каталога: данные и цены из БД. */
 router.get('/', async (_req, res: Response) => {
   try {
     const { data: rows, error } = await supabase
@@ -44,7 +43,7 @@ router.get('/', async (_req, res: Response) => {
 
     const items = (rows ?? []).map((item: CatalogRow) => ({
       ...item,
-      price: getCatalogItemPrice(item.id) ?? Number(item.price),
+      price: Number(item.price),
     }));
 
     res.json({ items });
@@ -73,7 +72,7 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       return res.status(404).json({ error: 'Товар не найден.' });
     }
 
-    const price = getCatalogItemPrice(catalog_item_id) ?? Number(item.price);
+    const price = Number(item.price);
     
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
@@ -130,6 +129,39 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
   }
 });
 
+/** GET /api/catalog/active-purchase-codes — список неиспользованных кодов (только мастер). */
+router.get(
+  '/active-purchase-codes',
+  verifyTelegramAuth,
+  requireRoot,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const { data: rows, error } = await supabase
+        .from('catalog_purchase_codes')
+        .select('code, catalog_item_id, created_at, catalog(name)')
+        .is('used_at', null)
+        .order('created_at', { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      const codes = (rows ?? []).map((r: { code: string; catalog_item_id: string; created_at: string; catalog: { name: string } | { name: string }[] | null }) => {
+        const catalog = Array.isArray(r.catalog) ? r.catalog[0] : r.catalog;
+        return {
+          code: r.code,
+          catalog_item_id: r.catalog_item_id,
+          item_name: catalog?.name ?? '—',
+          created_at: r.created_at,
+        };
+      });
+
+      res.json({ codes });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Ошибка загрузки кодов';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
 /** POST /api/catalog/generate-purchase-code — сгенерировать код покупки товара (только мастер). */
 router.post(
   '/generate-purchase-code',
@@ -162,7 +194,7 @@ router.post(
           .single();
 
         if (!insertError) {
-          const price = getCatalogItemPrice(item.id) ?? Number(item.price);
+          const price = Number(item.price);
           return res.json({
             success: true,
             code: row.code,
@@ -189,8 +221,6 @@ router.post(
 function normalizePurchaseCode(input: string): string | null {
   const t = (input ?? '').trim().toUpperCase();
   if (t.length === 5 && /^[A-Z0-9]+$/.test(t)) return t;
-  // старые коды формата Cxxxxx (6 символов)
-  if (t.length === 6 && t[0] === 'C' && /^[A-Z0-9]+$/.test(t)) return t;
   return null;
 }
 
@@ -229,7 +259,7 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
       return res.status(404).json({ error: 'Товар каталога не найден.' });
     }
 
-    const price = getCatalogItemPrice(item.id) ?? Number(item.price);
+    const price = Number(item.price);
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
