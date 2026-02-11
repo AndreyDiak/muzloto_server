@@ -4,12 +4,9 @@ import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
 import { sendTelegramMessage, escapeHtml } from '../services/telegram';
-import { incrementUserStat } from '../services/user-stats';
 
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-const CODE_LENGTH = 5;
-const PURCHASE_CODE_PREFIX = 'C';
-const PURCHASE_CODE_RANDOM_LENGTH = 5;
+const PURCHASE_CODE_LENGTH = 5;
 
 interface CatalogRow {
   id: string;
@@ -21,21 +18,11 @@ interface CatalogRow {
   updated_at: string;
 }
 
-function generateTicketCode(): string {
-  const bytes = new Uint8Array(CODE_LENGTH);
+function generatePurchaseCode(): string {
+  const bytes = new Uint8Array(PURCHASE_CODE_LENGTH);
   crypto.getRandomValues(bytes);
   let s = '';
-  for (let i = 0; i < CODE_LENGTH; i++) {
-    s += CODE_CHARS[bytes[i] % CODE_CHARS.length];
-  }
-  return s;
-}
-
-function generatePurchaseCode(): string {
-  const bytes = new Uint8Array(PURCHASE_CODE_RANDOM_LENGTH);
-  crypto.getRandomValues(bytes);
-  let s = PURCHASE_CODE_PREFIX;
-  for (let i = 0; i < PURCHASE_CODE_RANDOM_LENGTH; i++) {
+  for (let i = 0; i < PURCHASE_CODE_LENGTH; i++) {
     s += CODE_CHARS[bytes[i] % CODE_CHARS.length];
   }
   return s;
@@ -201,12 +188,13 @@ router.post(
 
 function normalizePurchaseCode(input: string): string | null {
   const t = (input ?? '').trim().toUpperCase();
+  if (t.length === 5 && /^[A-Z0-9]+$/.test(t)) return t;
+  // старые коды формата Cxxxxx (6 символов)
   if (t.length === 6 && t[0] === 'C' && /^[A-Z0-9]+$/.test(t)) return t;
-  if (t.length === 5 && /^[A-Z0-9]+$/.test(t)) return 'C' + t;
   return null;
 }
 
-/** POST /api/catalog/redeem-purchase-code — погасить код покупки: списать баланс, выдать билет. */
+/** POST /api/catalog/redeem-purchase-code — погасить код покупки: списать баланс, сообщение в ЛС. Без билетов. */
 router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { code: rawCode } = req.body;
@@ -266,52 +254,34 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
       .eq('telegram_id', telegramId);
     if (updateProfileError) throw new Error(updateProfileError.message);
 
-    let ticketCode = generateTicketCode();
-    const ticketMaxAttempts = 10;
-    for (let tAttempt = 0; tAttempt < ticketMaxAttempts; tAttempt++) {
-      const { data: ticket, error: ticketError } = await supabase
-        .from('tickets')
-        .insert({
-          telegram_id: telegramId,
-          catalog_item_id: item.id,
-          code: ticketCode,
-        })
-        .select('id, code, created_at')
-        .single();
+    const { error: markUsedError } = await supabase
+      .from('catalog_purchase_codes')
+      .update({ used_at: new Date().toISOString(), used_by_telegram_id: telegramId })
+      .eq('id', purchaseRow.id);
+    if (markUsedError) throw new Error(markUsedError.message);
 
-      if (!ticketError) {
-        const { error: markUsedError } = await supabase
-          .from('catalog_purchase_codes')
-          .update({ used_at: new Date().toISOString(), used_by_telegram_id: telegramId })
-          .eq('id', purchaseRow.id);
-        if (markUsedError) throw new Error(markUsedError.message);
+    const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
 
-        await incrementUserStat(telegramId, 'tickets_purchased');
-        const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
+    const messageText =
+      '✅ Покупка по коду оформлена!\n\n' +
+      `Товар: <b>${escapeHtml(item.name)}</b>\n` +
+      `Цена: ${price} монет\n` +
+      `Остаток монет: ${newBalance}`;
+    await sendTelegramMessage(telegramId, messageText);
 
-        return res.json({
-          success: true,
-          message: 'Покупка по коду оформлена.',
-          ticket: { id: ticket.id, code: ticket.code, created_at: ticket.created_at },
-          item: {
-            id: item.id,
-            name: item.name,
-            description: item.description ?? null,
-            price,
-            photo: item.photo ?? null,
-          },
-          newBalance,
-          newlyUnlockedAchievements,
-        });
-      }
-      if (ticketError.code === '23505') {
-        ticketCode = generateTicketCode();
-        continue;
-      }
-      throw new Error(ticketError.message);
-    }
-
-    throw new Error('Не удалось создать билет.');
+    return res.json({
+      success: true,
+      message: 'Покупка по коду оформлена.',
+      item: {
+        id: item.id,
+        name: item.name,
+        description: item.description ?? null,
+        price,
+        photo: item.photo ?? null,
+      },
+      newBalance,
+      newlyUnlockedAchievements,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Ошибка погашения кода';
     res.status(500).json({ error: message });
