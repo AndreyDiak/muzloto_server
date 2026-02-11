@@ -224,6 +224,61 @@ function normalizePurchaseCode(input: string): string | null {
   return null;
 }
 
+/** GET /api/catalog/preview-purchase-code?code=XXX — данные для подтверждения покупки (товар, цена, баланс), без списания */
+router.get('/preview-purchase-code', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const code = normalizePurchaseCode(String(req.query.code ?? ''));
+    if (!code) {
+      return res.status(400).json({ error: 'Неверный формат кода покупки.' });
+    }
+
+    const { data: purchaseRow, error: fetchError } = await supabase
+      .from('catalog_purchase_codes')
+      .select('id, catalog_item_id, used_at')
+      .eq('code', code)
+      .maybeSingle();
+
+    if (fetchError) throw new Error(fetchError.message);
+    if (!purchaseRow) {
+      return res.status(404).json({ error: 'Код не найден.' });
+    }
+    if (purchaseRow.used_at) {
+      return res.status(400).json({ error: 'Код уже использован.' });
+    }
+
+    const { data: item, error: itemError } = await supabase
+      .from('catalog')
+      .select('id, name, price')
+      .eq('id', purchaseRow.catalog_item_id)
+      .single();
+
+    if (itemError || !item) {
+      return res.status(404).json({ error: 'Товар не найден.' });
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('balance')
+      .eq('telegram_id', req.telegramId!)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ error: 'Профиль не найден.' });
+    }
+
+    const balance = Number(profile.balance) ?? 0;
+    const price = Number(item.price);
+
+    return res.json({
+      item: { id: item.id, name: item.name, price },
+      balance,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Ошибка при загрузке данных';
+    res.status(500).json({ error: message });
+  }
+});
+
 /** POST /api/catalog/redeem-purchase-code — погасить код покупки: списать баланс, сообщение в ЛС. Без билетов. */
 router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
   try {
