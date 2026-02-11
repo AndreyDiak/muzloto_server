@@ -6,7 +6,6 @@ import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
 import { sendTelegramMessage } from '../services/telegram';
-import { incrementUserStat } from '../services/user-stats';
 
 const router = Router();
 
@@ -88,33 +87,52 @@ interface VisitRewardResult {
   newlyUnlockedAchievements: Awaited<ReturnType<typeof checkAndUnlockAchievements>>['newlyUnlocked'];
 }
 
+const VISIT_REWARD_EVERY = 5;
+
 async function applyVisitReward(telegramId: number): Promise<VisitRewardResult> {
-  const { data: profile, error: profileError } = await supabase
+  // Просто увеличиваем games_visited при регистрации на мероприятие
+  // Прогресс до награды вычисляется: games_visited - (visit_rewards_claimed * 5)
+  let { data: statsRow } = await supabase
+    .from('user_stats')
+    .select('games_visited')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  if (!statsRow) {
+    const { error: insertError } = await supabase.from('user_stats').insert({
+      telegram_id: telegramId,
+      games_visited: 1,
+      tickets_purchased: 0,
+      bingo_collected: 0,
+      visit_rewards_claimed: 0,
+    });
+    if (insertError) {
+      throw new Error(`Failed to create user_stats: ${insertError.message}`);
+    }
+  } else {
+    const { error: updateStatsError } = await supabase
+      .from('user_stats')
+      .update({
+        games_visited: (statsRow?.games_visited ?? 0) + 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('telegram_id', telegramId);
+    if (updateStatsError) {
+      throw new Error(`Failed to update user_stats: ${updateStatsError.message}`);
+    }
+  }
+
+  const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
+
+  const { data: profile } = await supabase
     .from('profiles')
     .select('balance')
     .eq('telegram_id', telegramId)
     .single();
 
-  if (profileError || !profile) {
-    throw new Error(`Failed to fetch profile: ${profileError?.message || 'Profile not found'}`);
-  }
-
-  const newBalance = (profile.balance || 0) + REGISTRATION_REWARD;
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update({ balance: newBalance })
-    .eq('telegram_id', telegramId);
-
-  if (updateError) {
-    throw new Error(`Failed to update balance: ${updateError.message}`);
-  }
-
-  await incrementUserStat(telegramId, 'games_visited');
-  const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
-
   return {
-    finalBalance: newBalance,
-    coinsEarned: REGISTRATION_REWARD,
+    finalBalance: profile?.balance ?? 0,
+    coinsEarned: 0,
     newlyUnlockedAchievements,
   };
 }
@@ -229,9 +247,13 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     if (normalizedCode === '00000') {
       const result = await applyVisitReward(telegramId);
+      const msg =
+        result.coinsEarned > 0
+          ? `Тестовый код обработан. Начислено ${result.coinsEarned} монет!`
+          : 'Тестовый код обработан.';
       return res.json({
         success: true,
-        message: `Тестовый код обработан. Начислено ${REGISTRATION_REWARD} монет!`,
+        message: msg,
         event: { id: 'test', title: 'Тестовое событие' },
         newBalance: result.finalBalance,
         coinsEarned: result.coinsEarned,
@@ -286,13 +308,20 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     const result = await applyVisitReward(telegramId);
 
-    // Личное сообщение в Telegram о регистрации (не блокируем ответ)
-    const tgText = `Привет! Записал тебя на <b>«${event.title}»</b> — хорошего вечера! :) 😊\n\nЗа регистрацию начислил ${REGISTRATION_REWARD} монет  \n\nЗаглядывай в приложение, там можно обменять монеты на призы!.`;
+    const coinsText =
+      result.coinsEarned > 0
+        ? `За регистрацию начислил ${result.coinsEarned} монет. `
+        : 'До награды за посещения осталось ещё несколько визитов — заглядывай в приложение. ';
+    const tgText = `Привет! Записал тебя на <b>«${event.title}»</b> — хорошего вечера! :) 😊\n\n${coinsText}\n\nЗаглядывай в приложение, там можно обменять монеты на призы!`;
     void sendTelegramMessage(telegramId, tgText).catch(() => {});
 
+    const message =
+      result.coinsEarned > 0
+        ? `Вы зарегистрированы. Начислено ${result.coinsEarned} монет!`
+        : 'Вы зарегистрированы на мероприятие.';
     res.json({
       success: true,
-      message: `Вы зарегистрированы на мероприятие. Начислено ${REGISTRATION_REWARD} монет!`,
+      message,
       event: { id: event.id, title: event.title },
       newBalance: result.finalBalance,
       coinsEarned: result.coinsEarned,

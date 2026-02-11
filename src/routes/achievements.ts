@@ -1,9 +1,11 @@
 import { Response, Router } from 'express';
 import { ACHIEVEMENTS } from '../config/achievements';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
+import { REGISTRATION_REWARD } from '../constants';
 import { supabase } from '../services/supabase';
 
 const router = Router();
+const VISIT_REWARD_EVERY = 5;
 
 export interface AchievementWithUnlocked {
   slug: string;
@@ -34,7 +36,7 @@ router.get('/', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
         .eq('telegram_id', telegramId),
       supabase
         .from('user_stats')
-        .select('games_visited, tickets_purchased, bingo_collected')
+        .select('games_visited, tickets_purchased, bingo_collected, visit_rewards_claimed')
         .eq('telegram_id', telegramId)
         .single(),
     ]);
@@ -78,7 +80,76 @@ router.get('/', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
       throw new Error(`Failed to fetch user stats: ${statsError.message}`);
     }
 
-    res.json({ achievements: list });
+    // Прогресс до награды: games_visited - (visit_rewards_claimed * 5)
+    // Если прогресс >= 5, значит есть доступная награда
+    const gamesVisited = stats?.games_visited ?? 0;
+    const visitRewardsClaimed = stats?.visit_rewards_claimed ?? 0;
+    const visitRewardProgress = gamesVisited - visitRewardsClaimed * VISIT_REWARD_EVERY;
+    const visitRewardPending = visitRewardProgress >= VISIT_REWARD_EVERY;
+
+    res.json({
+      achievements: list,
+      visit_reward_progress: Math.min(visitRewardProgress, VISIT_REWARD_EVERY),
+      visit_reward_pending: visitRewardPending,
+      visit_reward_coins: REGISTRATION_REWARD,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post('/claim-visit-reward', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const telegramId = req.telegramId!;
+
+    const { data: stats, error: statsError } = await supabase
+      .from('user_stats')
+      .select('games_visited, visit_rewards_claimed')
+      .eq('telegram_id', telegramId)
+      .single();
+
+    if (statsError || !stats) {
+      return res.status(404).json({ error: 'Статистика не найдена.' });
+    }
+
+    const gamesVisited = stats.games_visited ?? 0;
+    const visitRewardsClaimed = stats.visit_rewards_claimed ?? 0;
+    const visitRewardProgress = gamesVisited - visitRewardsClaimed * VISIT_REWARD_EVERY;
+
+    if (visitRewardProgress < VISIT_REWARD_EVERY) {
+      return res.status(400).json({ error: 'Нет доступной награды за посещения.' });
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('balance')
+      .eq('telegram_id', telegramId)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ error: 'Профиль не найден.' });
+    }
+
+    const newBalance = (Number(profile.balance) ?? 0) + REGISTRATION_REWARD;
+
+    const [{ error: updateBalanceError }, { error: updateStatsError }] = await Promise.all([
+      supabase.from('profiles').update({ balance: newBalance }).eq('telegram_id', telegramId),
+      supabase
+        .from('user_stats')
+        .update({ visit_rewards_claimed: visitRewardsClaimed + 1 })
+        .eq('telegram_id', telegramId),
+    ]);
+
+    if (updateBalanceError || updateStatsError) {
+      throw new Error(updateBalanceError?.message ?? updateStatsError?.message ?? 'Ошибка обновления');
+    }
+
+    res.json({
+      success: true,
+      coinsAdded: REGISTRATION_REWARD,
+      newBalance,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Internal server error';
     res.status(500).json({ error: message });
