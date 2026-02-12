@@ -186,12 +186,18 @@ router.post(
         return res.status(404).json({ error: 'Товар не найден.' });
       }
 
+      const telegramId = req.telegramId!;
       const maxAttempts = 10;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const code = generatePurchaseCode();
         const { data: row, error: insertError } = await supabase
           .from('codes')
-          .insert({ code, type: 'purchase', catalog_item_id: item.id })
+          .insert({
+            code,
+            type: 'purchase',
+            catalog_item_id: item.id,
+            created_by_telegram_id: telegramId,
+          })
           .select('id, code, created_at')
           .single();
 
