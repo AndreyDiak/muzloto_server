@@ -12,3 +12,10 @@ export const VISIT_REWARD_COINS = 10_000;
 
 /** Монеты за регистрацию на мероприятие (начисляются при подтверждении в модалке) */
 export const REGISTRATION_REWARD = 1000;
+
+/** Награды за достижения по покупкам: 1 покупка, 3 покупки, 5 покупок (монеты начисляются автоматически при достижении) */
+export const PURCHASE_ACHIEVEMENT_REWARDS: Record<number, number> = {
+  1: 1000,
+  3: 2500,
+  5: 5000,
+};

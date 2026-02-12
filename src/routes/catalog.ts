@@ -1,6 +1,7 @@
 import { Response, Router } from 'express';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
+import { incrementUserStat } from '../services/user-stats';
 import { supabase } from '../services/supabase';
 import { sendTelegramMessage, escapeHtml } from '../services/telegram';
 
@@ -100,14 +101,14 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       throw new Error(`Не удалось списать монеты: ${updateError.message}`);
     }
 
+    await incrementUserStat(telegramId, 'tickets_purchased');
     const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
-
-    // Отправляем сообщение ботом с информацией о покупке
-    const messageText = `✅ Покупка оформлена!\n\n` +
+    // Награды за достижения (1, 3, 5 покупок) пользователь забирает кнопкой в разделе «Награды»
+    let messageText = `✅ Покупка оформлена!\n\n` +
       `Товар: <b>${escapeHtml(item.name)}</b>\n` +
       `Цена: ${price} монет\n` +
       `Остаток монет: ${newBalance}`;
-    
+    messageText += `\n\n💡 Заберите награду за достижения в разделе «Награды» в приложении.`;
     await sendTelegramMessage(telegramId, messageText);
 
     return res.json({
@@ -345,13 +346,15 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
       .eq('id', purchaseRow.id);
     if (markUsedError) throw new Error(markUsedError.message);
 
+    await incrementUserStat(telegramId, 'tickets_purchased');
     const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
-
-    const messageText =
+    // Награды за достижения пользователь забирает кнопкой в разделе «Награды»
+    let messageText =
       '✅ Покупка по коду оформлена!\n\n' +
       `Товар: <b>${escapeHtml(item.name)}</b>\n` +
       `Цена: ${price} монет\n` +
       `Остаток монет: ${newBalance}`;
+    messageText += `\n\n💡 Заберите награду за достижения в разделе «Награды» в приложении.`;
     await sendTelegramMessage(telegramId, messageText);
 
     return res.json({
