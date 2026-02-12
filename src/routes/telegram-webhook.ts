@@ -52,6 +52,23 @@ router.post('/webhook', async (req: Request, res: Response) => {
   const text = message.text ?? message.caption ?? '[медиа]';
   console.log('[telegram-webhook] ЛС от', message.from.id, message.from.username ?? '-', ':', text.slice(0, 50));
 
+  // /start shop-XXXXX — код покупки: открываем чат с ботом, чтобы потом бот мог отправить подтверждение в ЛС
+  const shopStartMatch = text.match(/^\/start\s+(shop-[A-Za-z0-9]{5})$/i);
+  if (shopStartMatch) {
+    const payload = shopStartMatch[1];
+    const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    if (appBaseUrl) {
+      const webAppUrl = `${appBaseUrl}?code=${encodeURIComponent(payload)}`;
+      await sendTelegramMessage(message.chat.id, '🛒 Нажмите кнопку ниже, чтобы открыть приложение и оформить покупку по коду.', {
+        webAppButton: { text: 'Открыть приложение', url: webAppUrl },
+      });
+    } else {
+      await sendTelegramMessage(message.chat.id, 'Откройте приложение из меню бота и введите код вручную в разделе «Профиль».');
+    }
+    res.sendStatus(200);
+    return;
+  }
+
   // На Vercel функция завершается после ответа — дожидаемся пересылки и ответа, потом отдаём 200
   await sendFormattedMessageToAdmin(
     {

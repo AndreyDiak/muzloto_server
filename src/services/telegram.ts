@@ -6,13 +6,21 @@
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
+/** Inline-кнопка с Web App (открывает мини-приложение по URL). */
+export interface TelegramWebAppButton {
+  text: string;
+  url: string;
+}
+
 /**
  * Отправляет сообщение пользователю в личку.
+ * reply_markup_web_app_url — если задан, добавляется одна кнопка «Открыть приложение» с этим URL.
  * Не бросает ошибку — при отсутствии токена или ошибке API только логирует.
  */
 export async function sendTelegramMessage(
   telegramId: number,
-  text: string
+  text: string,
+  options?: { webAppButton?: TelegramWebAppButton }
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token?.trim()) {
@@ -20,16 +28,25 @@ export async function sendTelegramMessage(
     return false;
   }
 
+  const body: Record<string, unknown> = {
+    chat_id: telegramId,
+    text,
+    parse_mode: 'HTML',
+  };
+  if (options?.webAppButton) {
+    body.reply_markup = {
+      inline_keyboard: [
+        [{ text: options.webAppButton.text, web_app: { url: options.webAppButton.url } }],
+      ],
+    };
+  }
+
   try {
     const url = `${TELEGRAM_API}/bot${token}/sendMessage`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: telegramId,
-        text,
-        parse_mode: 'HTML',
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
