@@ -103,12 +103,11 @@ router.post('/purchase', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     await incrementUserStat(telegramId, 'tickets_purchased');
     const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
-    // Награды за достижения (1, 3, 5 покупок) пользователь забирает кнопкой в разделе «Награды»
-    let messageText = `✅ Покупка оформлена!\n\n` +
+    const messageText =
+      `✅ Покупка оформлена!\n\n` +
       `Товар: <b>${escapeHtml(item.name)}</b>\n` +
       `Цена: ${price} монет\n` +
       `Остаток монет: ${newBalance}`;
-    messageText += `\n\n💡 Заберите награду за достижения в разделе «Награды» в приложении.`;
     await sendTelegramMessage(telegramId, messageText);
 
     return res.json({
@@ -357,13 +356,11 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
 
     await incrementUserStat(telegramId, 'tickets_purchased');
     const { newlyUnlocked: newlyUnlockedAchievements } = await checkAndUnlockAchievements(telegramId);
-    // Награды за достижения пользователь забирает кнопкой в разделе «Награды»
-    let messageText =
+    const messageText =
       '✅ Покупка по коду оформлена!\n\n' +
       `Товар: <b>${escapeHtml(item.name)}</b>\n` +
       `Цена: ${price} монет\n` +
       `Остаток монет: ${newBalance}`;
-    messageText += `\n\n💡 Заберите награду за достижения в разделе «Награды» в приложении.`;
     await sendTelegramMessage(telegramId, messageText);
 
     return res.json({
