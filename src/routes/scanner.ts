@@ -29,24 +29,25 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
     const { code } = req.body as { code?: string };
     const codeStr = typeof code === 'string' ? code.trim().toUpperCase() : '';
     if (codeStr.length !== 5) {
-      return res.status(400).json({ error: 'Неверный формат кода билета (ожидается 5 символов).' });
+      return res.status(400).json({ error: 'Неверный формат кода (ожидается 5 символов).' });
     }
 
-    const { data: ticket, error: ticketError } = await supabase
-      .from('tickets')
-      .select('id, telegram_id, catalog_item_id, code, used_at')
+    const { data: row, error: fetchError } = await supabase
+      .from('codes')
+      .select('id, type, catalog_item_id, owner_telegram_id, used_at')
       .eq('code', codeStr)
       .maybeSingle();
 
-    if (!ticketError && ticket) {
-      // Билет мероприятия
-      if (ticket.used_at) {
-        return res.status(400).json({ error: 'Билет уже использован.' });
-      }
-      const ownerId = ticket.telegram_id != null ? String(ticket.telegram_id) : null;
+    if (fetchError || !row || !row.catalog_item_id) {
+      return res.status(404).json({ error: 'Код не найден.' });
+    }
+
+    const ownerId = row.owner_telegram_id != null ? String(row.owner_telegram_id) : null;
+
+    if (row.type === 'purchase' && row.used_at == null && ownerId) {
       const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
         supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', ownerId).single(),
-        supabase.from('catalog').select('id, name, description, price, photo').eq('id', ticket.catalog_item_id).single(),
+        supabase.from('catalog').select('id, name, description, price, photo').eq('id', row.catalog_item_id).single(),
       ]);
       if (profileError || !profile) {
         return res.status(500).json({ error: 'Не удалось загрузить данные участника.' });
@@ -55,9 +56,9 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
         return res.status(500).json({ error: 'Не удалось загрузить данные предмета.' });
       }
       const { error: updateError } = await supabase
-        .from('tickets')
+        .from('codes')
         .update({ used_at: new Date().toISOString() })
-        .eq('id', ticket.id);
+        .eq('id', row.id);
       if (updateError) {
         return res.status(500).json({ error: 'Не удалось отметить билет как использованный.' });
       }
@@ -79,49 +80,41 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
       });
     }
 
-    // Не билет — пробуем код покупки из лавки удачи (catalog_purchase_codes)
-    const { data: purchaseRow, error: purchaseError } = await supabase
-      .from('catalog_purchase_codes')
-      .select('id, catalog_item_id, used_at, used_by_telegram_id')
-      .eq('code', codeStr)
-      .maybeSingle();
-
-    if (purchaseError || !purchaseRow) {
-      return res.status(404).json({ error: 'Билет или код покупки не найден.' });
-    }
-    if (!purchaseRow.used_at || purchaseRow.used_by_telegram_id == null) {
-      return res.status(400).json({
-        error: 'Код покупки ещё не погашен. Попросите покупателя оформить покупку в приложении.',
+    if (row.type === 'purchase') {
+      if (!row.used_at || !ownerId) {
+        return res.status(400).json({
+          error: 'Код покупки ещё не погашен. Попросите покупателя оформить покупку в приложении.',
+        });
+      }
+      const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
+        supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', ownerId).single(),
+        supabase.from('catalog').select('id, name, description, price, photo').eq('id', row.catalog_item_id).single(),
+      ]);
+      if (profileError || !profile) {
+        return res.status(500).json({ error: 'Не удалось загрузить данные покупателя.' });
+      }
+      if (itemError || !item) {
+        return res.status(500).json({ error: 'Не удалось загрузить данные товара.' });
+      }
+      return res.json({
+        success: true,
+        participant: {
+          telegram_id: profile.telegram_id,
+          username: profile.username ?? null,
+          first_name: profile.first_name ?? null,
+          avatar_url: profile.avatar_url ?? null,
+        },
+        item: {
+          id: item.id,
+          name: item.name,
+          description: item.description ?? null,
+          price: item.price,
+          photo: item.photo ?? null,
+        },
       });
     }
 
-    const buyerId = String(purchaseRow.used_by_telegram_id);
-    const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
-      supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', buyerId).single(),
-      supabase.from('catalog').select('id, name, description, price, photo').eq('id', purchaseRow.catalog_item_id).single(),
-    ]);
-    if (profileError || !profile) {
-      return res.status(500).json({ error: 'Не удалось загрузить данные покупателя.' });
-    }
-    if (itemError || !item) {
-      return res.status(500).json({ error: 'Не удалось загрузить данные товара.' });
-    }
-    return res.json({
-      success: true,
-      participant: {
-        telegram_id: profile.telegram_id,
-        username: profile.username ?? null,
-        first_name: profile.first_name ?? null,
-        avatar_url: profile.avatar_url ?? null,
-      },
-      item: {
-        id: item.id,
-        name: item.name,
-        description: item.description ?? null,
-        price: item.price,
-        photo: item.photo ?? null,
-      },
-    });
+    return res.status(404).json({ error: 'Код не найден.' });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Ошибка при сканировании';
     res.status(500).json({ error: message });
@@ -134,23 +127,23 @@ const MS_24H = 24 * 60 * 60 * 1000;
 router.get('/recent', verifyTelegramAuth, requireRoot, async (_req: AuthRequest, res: Response) => {
   try {
     const since = new Date(Date.now() - MS_24H).toISOString();
-    const { data: tickets, error: ticketsError } = await supabase
-      .from('tickets')
-      .select('id, code, used_at, telegram_id, catalog_item_id')
+    const { data: rows, error: fetchError } = await supabase
+      .from('codes')
+      .select('id, code, used_at, owner_telegram_id, catalog_item_id')
       .not('used_at', 'is', null)
       .gte('used_at', since)
       .order('used_at', { ascending: false });
 
-    if (ticketsError || !tickets?.length) {
+    if (fetchError || !rows?.length) {
       return res.json({ items: [] });
     }
 
-    const ownerIds = [...new Set(tickets.map((t) => String(t.telegram_id)))];
-    const catalogIds = [...new Set(tickets.map((t) => t.catalog_item_id))];
+    const ownerIds = [...new Set(rows.map((r) => String(r.owner_telegram_id)).filter(Boolean))];
+    const catalogIds = [...new Set(rows.map((r) => r.catalog_item_id).filter(Boolean))];
 
     const [profilesRes, catalogRes] = await Promise.all([
-      supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').in('telegram_id', ownerIds),
-      supabase.from('catalog').select('id, name, description, price, photo').in('id', catalogIds),
+      ownerIds.length ? supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').in('telegram_id', ownerIds) : { data: [] },
+      catalogIds.length ? supabase.from('catalog').select('id, name, description, price, photo').in('id', catalogIds) : { data: [] },
     ]);
 
     const profileByTgId = new Map<string, { telegram_id: unknown; username: string | null; first_name: string | null; avatar_url: string | null }>();
@@ -159,13 +152,14 @@ router.get('/recent', verifyTelegramAuth, requireRoot, async (_req: AuthRequest,
     const itemById = new Map<string, CatalogRow>();
     ((catalogRes.data ?? []) as CatalogRow[]).forEach((i) => itemById.set(i.id, i));
 
-    const items = tickets.map((t) => {
-      const profile = profileByTgId.get(String(t.telegram_id));
-      const catalogRow = itemById.get(t.catalog_item_id);
+    const items = rows.map((r) => {
+      const ownerId = r.owner_telegram_id != null ? String(r.owner_telegram_id) : null;
+      const profile = ownerId ? profileByTgId.get(ownerId) : null;
+      const catalogRow = r.catalog_item_id ? itemById.get(r.catalog_item_id) : null;
       return {
-        id: t.id,
-        used_at: t.used_at,
-        code: t.code,
+        id: r.id,
+        used_at: r.used_at,
+        code: r.code,
         participant: profile
           ? { telegram_id: profile.telegram_id, username: profile.username ?? null, first_name: profile.first_name ?? null, avatar_url: profile.avatar_url ?? null }
           : null,

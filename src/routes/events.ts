@@ -136,10 +136,21 @@ router.post('/validate-code', verifyTelegramAuth, async (req: AuthRequest, res: 
       });
     }
 
+    const { data: codeRow, error: codeError } = await supabase
+      .from('codes')
+      .select('event_id')
+      .eq('code', normalizedCode)
+      .eq('type', 'registration')
+      .maybeSingle();
+
+    if (codeError || !codeRow?.event_id) {
+      return res.status(404).json({ error: 'Мероприятие не найдено.' });
+    }
+
     const { data: event, error: eventError } = await supabase
       .from('events')
       .select('id, title, code')
-      .eq('code', normalizedCode)
+      .eq('id', codeRow.event_id)
       .single();
 
     if (eventError || !event) {
@@ -193,10 +204,21 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
       });
     }
 
+    const { data: codeRow, error: codeError } = await supabase
+      .from('codes')
+      .select('event_id')
+      .eq('code', normalizedCode)
+      .eq('type', 'registration')
+      .maybeSingle();
+
+    if (codeError || !codeRow?.event_id) {
+      return res.status(404).json({ error: 'Мероприятие не найдено.' });
+    }
+
     const { data: event, error: eventError } = await supabase
       .from('events')
       .select('id, title, code')
-      .eq('code', normalizedCode)
+      .eq('id', codeRow.event_id)
       .single();
 
     if (eventError || !event) {

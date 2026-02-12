@@ -76,6 +76,11 @@ router.post('/events', async (req: AuthRequest, res: Response) => {
       .single();
 
     if (error) throw new Error(error.message);
+    await supabase.from('codes').insert({
+      code,
+      type: 'registration',
+      event_id: inserted.id,
+    }).then((r) => { if (r.error && r.error.code !== '23505') throw new Error(r.error.message); });
     res.status(201).json(inserted);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка создания';

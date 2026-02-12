@@ -138,8 +138,9 @@ router.get(
   async (_req: AuthRequest, res: Response) => {
     try {
       const { data: rows, error } = await supabase
-        .from('catalog_purchase_codes')
+        .from('codes')
         .select('code, catalog_item_id, created_at, catalog(name)')
+        .eq('type', 'purchase')
         .is('used_at', null)
         .order('created_at', { ascending: false });
 
@@ -189,8 +190,8 @@ router.post(
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const code = generatePurchaseCode();
         const { data: row, error: insertError } = await supabase
-          .from('catalog_purchase_codes')
-          .insert({ code, catalog_item_id: item.id })
+          .from('codes')
+          .insert({ code, type: 'purchase', catalog_item_id: item.id })
           .select('id, code, created_at')
           .single();
 
@@ -234,13 +235,14 @@ router.get('/preview-purchase-code', verifyTelegramAuth, async (req: AuthRequest
     }
 
     const { data: purchaseRow, error: fetchError } = await supabase
-      .from('catalog_purchase_codes')
+      .from('codes')
       .select('id, catalog_item_id, used_at')
       .eq('code', code)
+      .eq('type', 'purchase')
       .maybeSingle();
 
     if (fetchError) throw new Error(fetchError.message);
-    if (!purchaseRow) {
+    if (!purchaseRow || !purchaseRow.catalog_item_id) {
       return res.status(404).json({ error: 'Код не найден.' });
     }
     if (purchaseRow.used_at) {
@@ -292,13 +294,14 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
     }
 
     const { data: purchaseRow, error: fetchError } = await supabase
-      .from('catalog_purchase_codes')
+      .from('codes')
       .select('id, catalog_item_id, used_at')
       .eq('code', code)
+      .eq('type', 'purchase')
       .maybeSingle();
 
     if (fetchError) throw new Error(fetchError.message);
-    if (!purchaseRow) {
+    if (!purchaseRow || !purchaseRow.catalog_item_id) {
       return res.status(404).json({ error: 'Код не найден.' });
     }
     if (purchaseRow.used_at) {
@@ -341,8 +344,8 @@ router.post('/redeem-purchase-code', verifyTelegramAuth, async (req: AuthRequest
     if (updateProfileError) throw new Error(updateProfileError.message);
 
     const { error: markUsedError } = await supabase
-      .from('catalog_purchase_codes')
-      .update({ used_at: new Date().toISOString(), used_by_telegram_id: telegramId })
+      .from('codes')
+      .update({ used_at: new Date().toISOString(), owner_telegram_id: telegramId })
       .eq('id', purchaseRow.id);
     if (markUsedError) throw new Error(markUsedError.message);
 
