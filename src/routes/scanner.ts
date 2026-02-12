@@ -36,47 +36,76 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
       .from('tickets')
       .select('id, telegram_id, catalog_item_id, code, used_at')
       .eq('code', codeStr)
-      .single();
+      .maybeSingle();
 
-    if (ticketError || !ticket) {
-      return res.status(404).json({ error: 'Билет не найден.' });
-    }
-
-    if (ticket.used_at) {
-      return res.status(400).json({ error: 'Билет уже использован.' });
-    }
-
-    // Supabase возвращает bigint как строку; для запроса к profiles используем строку, чтобы не терять точность
-    const ownerId = ticket.telegram_id != null ? String(ticket.telegram_id) : null;
-    const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
-      supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', ownerId).single(),
-      supabase.from('catalog').select('id, name, description, price, photo').eq('id', ticket.catalog_item_id).single(),
-    ]);
-
-    if (profileError || !profile) {
-      const details = profileError?.message;
-      return res.status(500).json({
-        error: 'Не удалось загрузить данные участника.',
-        ...(details && { details }),
+    if (!ticketError && ticket) {
+      // Билет мероприятия
+      if (ticket.used_at) {
+        return res.status(400).json({ error: 'Билет уже использован.' });
+      }
+      const ownerId = ticket.telegram_id != null ? String(ticket.telegram_id) : null;
+      const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
+        supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', ownerId).single(),
+        supabase.from('catalog').select('id, name, description, price, photo').eq('id', ticket.catalog_item_id).single(),
+      ]);
+      if (profileError || !profile) {
+        return res.status(500).json({ error: 'Не удалось загрузить данные участника.' });
+      }
+      if (itemError || !item) {
+        return res.status(500).json({ error: 'Не удалось загрузить данные предмета.' });
+      }
+      const { error: updateError } = await supabase
+        .from('tickets')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', ticket.id);
+      if (updateError) {
+        return res.status(500).json({ error: 'Не удалось отметить билет как использованный.' });
+      }
+      return res.json({
+        success: true,
+        participant: {
+          telegram_id: profile.telegram_id,
+          username: profile.username ?? null,
+          first_name: profile.first_name ?? null,
+          avatar_url: profile.avatar_url ?? null,
+        },
+        item: {
+          id: item.id,
+          name: item.name,
+          description: item.description ?? null,
+          price: item.price,
+          photo: item.photo ?? null,
+        },
       });
+    }
+
+    // Не билет — пробуем код покупки из лавки удачи (catalog_purchase_codes)
+    const { data: purchaseRow, error: purchaseError } = await supabase
+      .from('catalog_purchase_codes')
+      .select('id, catalog_item_id, used_at, used_by_telegram_id')
+      .eq('code', codeStr)
+      .maybeSingle();
+
+    if (purchaseError || !purchaseRow) {
+      return res.status(404).json({ error: 'Билет или код покупки не найден.' });
+    }
+    if (!purchaseRow.used_at || purchaseRow.used_by_telegram_id == null) {
+      return res.status(400).json({
+        error: 'Код покупки ещё не погашен. Попросите покупателя оформить покупку в приложении.',
+      });
+    }
+
+    const buyerId = String(purchaseRow.used_by_telegram_id);
+    const [{ data: profile, error: profileError }, { data: item, error: itemError }] = await Promise.all([
+      supabase.from('profiles').select('telegram_id, username, first_name, avatar_url').eq('telegram_id', buyerId).single(),
+      supabase.from('catalog').select('id, name, description, price, photo').eq('id', purchaseRow.catalog_item_id).single(),
+    ]);
+    if (profileError || !profile) {
+      return res.status(500).json({ error: 'Не удалось загрузить данные покупателя.' });
     }
     if (itemError || !item) {
-      const details = itemError?.message;
-      return res.status(500).json({
-        error: 'Не удалось загрузить данные предмета.',
-        ...(details && { details }),
-      });
+      return res.status(500).json({ error: 'Не удалось загрузить данные товара.' });
     }
-
-    const { error: updateError } = await supabase
-      .from('tickets')
-      .update({ used_at: new Date().toISOString() })
-      .eq('id', ticket.id);
-
-    if (updateError) {
-      return res.status(500).json({ error: 'Не удалось отметить билет как использованный.' });
-    }
-
     return res.json({
       success: true,
       participant: {
