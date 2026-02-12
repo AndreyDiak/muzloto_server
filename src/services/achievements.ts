@@ -81,3 +81,46 @@ export async function grantPurchaseAchievementRewards(
   if (balanceRes.error || statsRes.error) return { coinsAdded: 0, newBalance: undefined };
   return { coinsAdded: totalCoins, newBalance };
 }
+
+type PurchaseThreshold = 1 | 3 | 5;
+
+/** Начисляет монеты только за один порог (1, 3 или 5 покупок), если достигнут и награда ещё не выдана. */
+export async function grantSinglePurchaseAchievementReward(
+  telegramId: number,
+  threshold: PurchaseThreshold
+): Promise<{ coinsAdded: number; newBalance?: number }> {
+  const key = PURCHASE_CLAIMED_KEYS[threshold];
+  const coins = PURCHASE_ACHIEVEMENT_REWARDS[threshold];
+  if (coins == null) return { coinsAdded: 0, newBalance: undefined };
+
+  const { data: stats, error: statsError } = await supabase
+    .from('user_stats')
+    .select(`tickets_purchased, ${key}`)
+    .eq('telegram_id', telegramId)
+    .single();
+
+  if (statsError || !stats) return { coinsAdded: 0, newBalance: undefined };
+
+  const ticketsPurchased = stats.tickets_purchased ?? 0;
+  const claimedAt = stats[key as keyof typeof stats];
+  if (ticketsPurchased < threshold || claimedAt) return { coinsAdded: 0, newBalance: undefined };
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('balance')
+    .eq('telegram_id', telegramId)
+    .single();
+
+  if (profileError || !profile) return { coinsAdded: 0, newBalance: undefined };
+
+  const newBalance = (Number(profile.balance) ?? 0) + coins;
+  const now = new Date().toISOString();
+
+  const [balanceRes, statsRes] = await Promise.all([
+    supabase.from('profiles').update({ balance: newBalance }).eq('telegram_id', telegramId),
+    supabase.from('user_stats').update({ [key]: now }).eq('telegram_id', telegramId),
+  ]);
+
+  if (balanceRes.error || statsRes.error) return { coinsAdded: 0, newBalance: undefined };
+  return { coinsAdded: coins, newBalance };
+}

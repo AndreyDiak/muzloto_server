@@ -1,7 +1,7 @@
 import { Response, Router } from 'express';
 import { PURCHASE_ACHIEVEMENT_REWARDS, VISIT_REWARD_COINS, VISIT_REWARD_EVERY } from '../constants';
 import { AuthRequest, verifyTelegramAuth } from '../middleware/auth';
-import { grantPurchaseAchievementRewards } from '../services/achievements';
+import { grantPurchaseAchievementRewards, grantSinglePurchaseAchievementReward } from '../services/achievements';
 import { supabase } from '../services/supabase';
 
 const router = Router();
@@ -132,7 +132,7 @@ router.post('/claim-visit-reward', verifyTelegramAuth, async (req: AuthRequest, 
   }
 });
 
-/** POST /api/achievements/claim-purchase-rewards — забрать награды за достижения по покупкам (1, 3, 5), если порог достигнут и награда ещё не получена. */
+/** POST /api/achievements/claim-purchase-rewards — забрать все доступные награды за покупки (1, 3, 5). */
 router.post('/claim-purchase-rewards', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
   try {
     const telegramId = req.telegramId!;
@@ -140,6 +140,40 @@ router.post('/claim-purchase-rewards', verifyTelegramAuth, async (req: AuthReque
 
     if (coinsAdded === 0) {
       return res.status(400).json({ error: 'Нет доступных наград за покупки.' });
+    }
+
+    res.json({
+      success: true,
+      coinsAdded,
+      newBalance: newBalance ?? 0,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: message });
+  }
+});
+
+const PURCHASE_THRESHOLDS = [1, 3, 5] as const;
+
+/** POST /api/achievements/claim-purchase-reward — забрать награду только за один порог (1, 3 или 5 покупок). */
+router.post('/claim-purchase-reward', verifyTelegramAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const telegramId = req.telegramId!;
+    const threshold = req.body?.threshold;
+    if (
+      typeof threshold !== 'number' ||
+      !PURCHASE_THRESHOLDS.includes(threshold as (typeof PURCHASE_THRESHOLDS)[number])
+    ) {
+      return res.status(400).json({ error: 'Укажите порог: 1, 3 или 5.' });
+    }
+
+    const { coinsAdded, newBalance } = await grantSinglePurchaseAchievementReward(
+      telegramId,
+      threshold as 1 | 3 | 5
+    );
+
+    if (coinsAdded === 0) {
+      return res.status(400).json({ error: 'Награда за этот порог недоступна или уже получена.' });
     }
 
     res.json({
