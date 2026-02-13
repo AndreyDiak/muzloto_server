@@ -15,12 +15,13 @@ export interface TelegramWebAppButton {
 /**
  * Отправляет сообщение пользователю в личку.
  * reply_markup_web_app_url — если задан, добавляется одна кнопка «Открыть приложение» с этим URL.
+ * parseMode: false — отправить как обычный текст (переносы \n сохраняются). По умолчанию HTML.
  * Не бросает ошибку — при отсутствии токена или ошибке API только логирует.
  */
 export async function sendTelegramMessage(
   telegramId: number,
   text: string,
-  options?: { webAppButton?: TelegramWebAppButton }
+  options?: { webAppButton?: TelegramWebAppButton; parseMode?: 'HTML' | false }
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token?.trim()) {
@@ -31,8 +32,10 @@ export async function sendTelegramMessage(
   const body: Record<string, unknown> = {
     chat_id: telegramId,
     text,
-    parse_mode: 'HTML',
   };
+  if (options?.parseMode !== false) {
+    body.parse_mode = 'HTML';
+  }
   if (options?.webAppButton) {
     body.reply_markup = {
       inline_keyboard: [

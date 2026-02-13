@@ -1,7 +1,6 @@
 import { randomInt } from 'crypto';
 import { Response, Router } from 'express';
-import { RAFFLE_WINNER_COINS } from '../constants';
-import { REGISTRATION_REWARD } from '../constants';
+import { RAFFLE_WINNER_COINS, REGISTRATION_REWARD } from '../constants';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
@@ -319,6 +318,49 @@ router.get(
       }));
 
       res.json({ registrations });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+const BROADCAST_FEEDBACK_MESSAGE =
+  'Спасибо, что был с нами в этот вечер — мы очень рады! ❤️\n\n' +
+  'Нам важно именно твоё мнение: напиши, что понравилось и что можно улучшить. Рады любой обратной связи! 🙏';
+
+/** POST /api/events/:eventId/broadcast-feedback — рассылка просьбы об обратной связи всем зарегистрированным (только root) */
+router.post(
+  '/:eventId/broadcast-feedback',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { data: regs, error: regError } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId)
+        .eq('status', 'confirmed');
+
+      if (regError) throw new Error(regError.message);
+
+      const telegramIds = [...new Set((regs ?? []).map((r) => Number(r.telegram_id)).filter(Boolean))];
+      let sent = 0;
+      let failed = 0;
+      for (const telegramId of telegramIds) {
+        const ok = await sendTelegramMessage(telegramId, BROADCAST_FEEDBACK_MESSAGE, {
+          parseMode: false,
+        });
+        if (ok) sent++;
+        else failed++;
+      }
+
+      return res.json({
+        total: telegramIds.length,
+        sent,
+        failed,
+      });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Internal server error';
       res.status(500).json({ error: message });
