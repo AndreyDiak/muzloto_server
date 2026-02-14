@@ -12,16 +12,32 @@ export interface TelegramWebAppButton {
   url: string;
 }
 
+/** Inline-кнопка с callback_data (до 64 байт). */
+export interface TelegramInlineButton {
+  text: string;
+  callback_data: string;
+}
+
+/** Reply-клавиатура: массив рядов кнопок (текст кнопки = то, что придёт в сообщении). */
+export type ReplyKeyboard = string[][];
+
 /**
  * Отправляет сообщение пользователю в личку.
- * reply_markup_web_app_url — если задан, добавляется одна кнопка «Открыть приложение» с этим URL.
- * parseMode: false — отправить как обычный текст (переносы \n сохраняются). По умолчанию HTML.
+ * webAppButton — одна inline-кнопка «Открыть приложение».
+ * replyKeyboard — постоянная клавиатура под полем ввода (например [["Профиль", "Мероприятия"]]).
+ * inlineKeyboard — inline-кнопки под сообщением (например для «Зарегистрироваться» по мероприятиям).
+ * parseMode: false — обычный текст, \n сохраняются.
  * Не бросает ошибку — при отсутствии токена или ошибке API только логирует.
  */
 export async function sendTelegramMessage(
   telegramId: number,
   text: string,
-  options?: { webAppButton?: TelegramWebAppButton; parseMode?: 'HTML' | false }
+  options?: {
+    webAppButton?: TelegramWebAppButton;
+    replyKeyboard?: ReplyKeyboard;
+    inlineKeyboard?: TelegramInlineButton[][];
+    parseMode?: 'HTML' | false;
+  }
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token?.trim()) {
@@ -42,6 +58,16 @@ export async function sendTelegramMessage(
         [{ text: options.webAppButton.text, web_app: { url: options.webAppButton.url } }],
       ],
     };
+  } else if (options?.replyKeyboard?.length) {
+    body.reply_markup = {
+      keyboard: options.replyKeyboard.map((row) => row.map((t) => ({ text: t }))),
+      resize_keyboard: true,
+      persistent: true,
+    };
+  } else if (options?.inlineKeyboard?.length) {
+    body.reply_markup = {
+      inline_keyboard: options.inlineKeyboard,
+    };
   }
 
   try {
@@ -60,6 +86,31 @@ export async function sendTelegramMessage(
     return true;
   } catch (e) {
     console.warn('[telegram] sendMessage error:', e);
+    return false;
+  }
+}
+
+/**
+ * Ответ на нажатие inline-кнопки (убирает «часики» и опционально показывает всплывающий текст).
+ */
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  options?: { text?: string }
+): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token?.trim()) return false;
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        ...(options?.text && { text: options.text }),
+      }),
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn('[telegram] answerCallbackQuery error:', e);
     return false;
   }
 }

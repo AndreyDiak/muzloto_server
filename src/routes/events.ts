@@ -8,13 +8,14 @@ import { sendTelegramMessage } from '../services/telegram';
 
 const router = Router();
 
-interface VisitRewardResult {
+export interface VisitRewardResult {
   finalBalance: number;
   coinsEarned: number;
   newlyUnlockedAchievements: Awaited<ReturnType<typeof checkAndUnlockAchievements>>['newlyUnlocked'];
 }
 
-async function applyVisitReward(telegramId: number): Promise<VisitRewardResult> {
+/** Увеличивает games_visited, начисляет монеты за регистрацию. Используется при регистрации на мероприятие (API и бот). */
+export async function applyVisitReward(telegramId: number): Promise<VisitRewardResult> {
   // Увеличиваем games_visited при регистрации; награда за каждые N посещений — в achievements (constants: VISIT_REWARD_EVERY, VISIT_REWARD_COINS)
   let { data: statsRow } = await supabase
     .from('user_stats')
