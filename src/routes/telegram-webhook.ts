@@ -290,76 +290,45 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
     const eventId = data.slice(REG_CALLBACK_PREFIX.length);
 
-    try {
-      const { data: event, error: eventError } = await supabase
-        .from('events')
-        .select('id, title')
-        .eq('id', eventId)
-        .single();
+    const { data: event, error: eventError } = await supabase
+      .from('events')
+      .select('id, title')
+      .eq('id', eventId)
+      .single();
 
-      if (eventError || !event) {
-        await answerCallbackQuery(cq.id, { text: 'Мероприятие не найдено' });
-        await sendTelegramMessage(chatId, 'Мероприятие не найдено.', {
-          replyKeyboard: BOT_REPLY_KEYBOARD,
-          parseMode: false,
-        });
-        res.sendStatus(200);
-        return;
-      }
-
-      const { data: existing } = await supabase
-        .from('registrations')
-        .select('id')
-        .eq('event_id', event.id)
-        .eq('telegram_id', telegramId)
-        .maybeSingle();
-
-      if (existing) {
-        await answerCallbackQuery(cq.id, { text: 'Вы уже зарегистрированы' });
-        await sendTelegramMessage(chatId, `Вы уже зарегистрированы на «${event.title}».`, {
-          replyKeyboard: BOT_REPLY_KEYBOARD,
-          parseMode: false,
-        });
-        res.sendStatus(200);
-        return;
-      }
-
-      const { error: insertError } = await supabase.from('registrations').insert({
-        event_id: event.id,
-        telegram_id: telegramId,
-        status: 'confirmed',
-      });
-
-      if (insertError) {
-        await answerCallbackQuery(cq.id, { text: 'Ошибка регистрации' });
-        await sendTelegramMessage(chatId, 'Не удалось зарегистрироваться. Попробуйте позже.', {
-          replyKeyboard: BOT_REPLY_KEYBOARD,
-          parseMode: false,
-        });
-        res.sendStatus(200);
-        return;
-      }
-
-      const result = await applyVisitReward(telegramId);
-      await answerCallbackQuery(cq.id, { text: 'Вы зарегистрированы!' });
-
-      const coinsLine =
-        result.coinsEarned > 0
-          ? `За регистрацию начислено ${result.coinsEarned} монет. `
-          : '';
-      const text = `Вы зарегистрированы на «${event.title}». ${coinsLine}Хорошего вечера! 😊`;
-      await sendTelegramMessage(chatId, text, {
+    if (eventError || !event) {
+      await answerCallbackQuery(cq.id, { text: 'Мероприятие не найдено' });
+      await sendTelegramMessage(chatId, 'Мероприятие не найдено.', {
         replyKeyboard: BOT_REPLY_KEYBOARD,
         parseMode: false,
       });
-    } catch (e) {
-      console.error('[telegram-webhook] callback register error:', e);
-      await answerCallbackQuery(cq.id, { text: 'Ошибка' });
-      await sendTelegramMessage(chatId, 'Произошла ошибка. Попробуйте позже.', {
-        replyKeyboard: BOT_REPLY_KEYBOARD,
-        parseMode: false,
-      });
+      res.sendStatus(200);
+      return;
     }
+
+    const { data: existing } = await supabase
+      .from('registrations')
+      .select('id')
+      .eq('event_id', event.id)
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+
+    if (existing) {
+      await answerCallbackQuery(cq.id, { text: 'Вы уже зарегистрированы' });
+      await sendTelegramMessage(chatId, `Вы уже зарегистрированы на «${escapeHtml(event.title)}».`, {
+        replyKeyboard: BOT_REPLY_KEYBOARD,
+      });
+      res.sendStatus(200);
+      return;
+    }
+
+    // Не регистрируем сразу — просим ввести код
+    await answerCallbackQuery(cq.id, { text: 'Введите код' });
+    await sendTelegramMessage(
+      chatId,
+      `Чтобы участвовать в розыгрыше на «${escapeHtml(event.title)}», введите код из 5 цифр (код мероприятия).`,
+      { replyKeyboard: BOT_REPLY_KEYBOARD }
+    );
     res.sendStatus(200);
     return;
   }
@@ -489,7 +458,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
       return [
         isRegistered
           ? { text: `✓ Вы зарегистрированы: ${shortTitle}`, callback_data: ALREADY_CALLBACK_PREFIX + e.id }
-          : { text: `Зарегистрироваться: ${shortTitle}`, callback_data: REG_CALLBACK_PREFIX + e.id },
+          : { text: `Участвовать в розыгрыше: ${shortTitle}`, callback_data: REG_CALLBACK_PREFIX + e.id },
       ];
     });
 
