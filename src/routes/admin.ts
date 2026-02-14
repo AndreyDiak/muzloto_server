@@ -2,6 +2,24 @@ import { Response, Router } from 'express';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { supabase } from '../services/supabase';
 
+const CATALOG_PHOTOS_BUCKET = 'catalog-photos';
+/** Обложки мероприятий лежат в catalog-photos с путём events/... */
+
+/**
+ * Удаляет файл из storage по публичному URL, если URL относится к указанному бакету.
+ * Формат URL: .../storage/v1/object/public/<bucket>/<path>
+ */
+async function removeStorageFileIfOurs(bucket: string, publicUrl: string | null): Promise<void> {
+  if (!publicUrl || typeof publicUrl !== 'string') return;
+  const trimmed = publicUrl.trim();
+  const prefix = `/object/public/${bucket}/`;
+  const idx = trimmed.indexOf(prefix);
+  if (idx === -1) return;
+  const path = trimmed.slice(idx + prefix.length).split('?')[0];
+  if (!path) return;
+  await supabase.storage.from(bucket).remove([path]);
+}
+
 const router = Router();
 
 /** Все роуты админки требуют авторизацию и root */
@@ -84,16 +102,44 @@ router.post('/events', async (req: AuthRequest, res: Response) => {
   }
 });
 
-/** DELETE /api/admin/events/:id — удалить мероприятие */
+/** DELETE /api/admin/events/:id — удалить связанные данные, обложку из storage и мероприятие */
 router.delete('/events/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const { data: event } = await supabase
+      .from('events')
+      .select('location_href')
+      .eq('id', id)
+      .maybeSingle();
+    if (event?.location_href) {
+      await removeStorageFileIfOurs(CATALOG_PHOTOS_BUCKET, event.location_href);
+    }
+    // Удаляем связанные записи (порядок важен из-за внешних ключей)
+    await supabase.from('event_raffle_winners').delete().eq('event_id', id);
+    await supabase.from('registrations').delete().eq('event_id', id);
+    await supabase.from('codes').delete().eq('event_id', id).eq('type', 'registration');
     const { error } = await supabase.from('events').delete().eq('id', id);
 
     if (error) throw new Error(error.message);
     res.json({ success: true });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка удаления';
+    res.status(500).json({ error: message });
+  }
+});
+
+/** GET /api/admin/profiles — список профилей (для выбора получателей рассылки анонса) */
+router.get('/profiles', async (_req: AuthRequest, res: Response) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('telegram_id, first_name, username')
+      .order('telegram_id', { ascending: true });
+
+    if (error) throw new Error(error.message);
+    res.json({ profiles: data ?? [] });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Ошибка загрузки';
     res.status(500).json({ error: message });
   }
 });
@@ -145,10 +191,18 @@ router.post('/catalog', async (req: AuthRequest, res: Response) => {
   }
 });
 
-/** DELETE /api/admin/catalog/:id — удалить позицию каталога */
+/** DELETE /api/admin/catalog/:id — удалить позицию каталога и фото из storage */
 router.delete('/catalog/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const { data: item } = await supabase
+      .from('catalog')
+      .select('photo')
+      .eq('id', id)
+      .maybeSingle();
+    if (item?.photo) {
+      await removeStorageFileIfOurs(CATALOG_PHOTOS_BUCKET, item.photo);
+    }
     const { error } = await supabase.from('catalog').delete().eq('id', id);
 
     if (error) throw new Error(error.message);

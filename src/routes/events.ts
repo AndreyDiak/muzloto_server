@@ -334,6 +334,74 @@ const BROADCAST_FEEDBACK_MESSAGE =
   'Спасибо, что был с нами в этот вечер — мы очень рады! ❤️\n\n' +
   'Нам важно именно твоё мнение: напиши, что понравилось и что можно улучшить. Рады любой обратной связи! 🙏';
 
+function formatEventDateForAnnounce(isoDate: string): string {
+  try {
+    const d = new Date(isoDate);
+    return d.toLocaleDateString('ru-RU', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  } catch {
+    return isoDate;
+  }
+}
+
+/** POST /api/events/:eventId/broadcast-announce — рассылка анонса мероприятия выбранным пользователям (только root) */
+router.post(
+  '/:eventId/broadcast-announce',
+  verifyTelegramAuth,
+  requireRoot,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const body = req.body as { telegram_ids?: number[] };
+      const telegramIds = Array.isArray(body.telegram_ids)
+        ? [...new Set(body.telegram_ids)].filter((id) => typeof id === 'number' && id > 0)
+        : [];
+      if (telegramIds.length === 0) {
+        return res.status(400).json({ error: 'Выберите хотя бы одного получателя.' });
+      }
+
+      const { data: event, error: eventError } = await supabase
+        .from('events')
+        .select('id, title, event_date, location')
+        .eq('id', eventId)
+        .single();
+
+      if (eventError || !event) {
+        return res.status(404).json({ error: 'Мероприятие не найдено.' });
+      }
+
+      const dateStr = formatEventDateForAnnounce(event.event_date);
+      const placeStr = event.location?.trim() || 'место уточняется';
+      const message =
+        `🎤 Анонсируем новое мероприятие!\n\n` +
+        `${dateStr} в ${placeStr}.\n\n` +
+        `Будем петь тематические песни «${event.title}».\n\n` +
+        `Мы обязательно ждём именно тебя! 💙`;
+
+      let sent = 0;
+      let failed = 0;
+      for (const telegramId of telegramIds) {
+        const ok = await sendTelegramMessage(telegramId, message, { parseMode: false });
+        if (ok) sent++;
+        else failed++;
+      }
+
+      return res.json({
+        total: telegramIds.length,
+        sent,
+        failed,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Internal server error';
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
 /** POST /api/events/:eventId/broadcast-feedback — рассылка просьбы об обратной связи всем зарегистрированным (только root) */
 router.post(
   '/:eventId/broadcast-feedback',
