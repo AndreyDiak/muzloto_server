@@ -8,6 +8,14 @@ import { sendTelegramMessage } from '../services/telegram';
 
 const router = Router();
 
+const MOSCOW_TZ = 'Europe/Moscow';
+
+function getStartOfTodayMoscow(): Date {
+  const now = new Date();
+  const moscowDateStr = now.toLocaleDateString('sv-SE', { timeZone: MOSCOW_TZ });
+  return new Date(`${moscowDateStr}T00:00:00+03:00`);
+}
+
 export interface VisitRewardResult {
   finalBalance: number;
   coinsEarned: number;
@@ -151,12 +159,17 @@ router.post('/validate-code', verifyTelegramAuth, async (req: AuthRequest, res: 
 
     const { data: event, error: eventError } = await supabase
       .from('events')
-      .select('id, title, code')
+      .select('id, title, code, event_date')
       .eq('id', codeRow.event_id)
       .single();
 
     if (eventError || !event) {
       return res.status(404).json({ error: 'Мероприятие не найдено.' });
+    }
+
+    const startOfToday = getStartOfTodayMoscow();
+    if (!event.event_date || new Date(event.event_date) < startOfToday) {
+      return res.status(404).json({ error: 'Мероприятие уже прошло. Регистрация недоступна.' });
     }
 
     const { data: existingRegistration } = await supabase
@@ -221,12 +234,17 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     const { data: event, error: eventError } = await supabase
       .from('events')
-      .select('id, title, code')
+      .select('id, title, code, event_date')
       .eq('id', codeRow.event_id)
       .single();
 
     if (eventError || !event) {
       return res.status(404).json({ error: 'Мероприятие не найдено.' });
+    }
+
+    const startOfToday = getStartOfTodayMoscow();
+    if (!event.event_date || new Date(event.event_date) < startOfToday) {
+      return res.status(400).json({ error: 'Мероприятие уже прошло. Регистрация недоступна.' });
     }
 
     const { data: existingRegistration } = await supabase

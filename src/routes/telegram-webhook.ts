@@ -623,10 +623,21 @@ router.post('/webhook', async (req: Request, res: Response) => {
     if (codeRow?.event_id) {
       const { data: event } = await supabase
         .from('events')
-        .select('id, title')
+        .select('id, title, event_date')
         .eq('id', codeRow.event_id)
         .single();
       if (event) {
+        const startOfToday = getStartOfTodayMoscow();
+        const isPast = !event.event_date || new Date(event.event_date) < startOfToday;
+        if (isPast) {
+          await sendTelegramMessage(
+            chatId,
+            'Мероприятие уже прошло. Регистрация недоступна.',
+            { replyKeyboard: BOT_REPLY_KEYBOARD, parseMode: false }
+          );
+          res.sendStatus(200);
+          return;
+        }
         const { data: existing } = await supabase
           .from('registrations')
           .select('id')
