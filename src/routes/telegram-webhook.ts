@@ -23,10 +23,14 @@ import {
 const DEFAULT_REPLY = `Организаторы свяжутся с вами в ближайшее время!
 А пока вы ждете, предлагаю открыть наше приложение и посмотреть Афишу :)`;
 
-/** Постоянная клавиатура под полем ввода */
-const BOT_REPLY_KEYBOARD = [['Профиль', 'Мероприятия']];
+/** Постоянная клавиатура под полем ввода (с эмодзи для каждой кнопки) */
+const BOT_REPLY_KEYBOARD = [
+  ['👤 Профиль', '📅 Мероприятия'],
+  ['🍀 Лавка удачи', '🏆 Награды'],
+];
 
 const REG_CALLBACK_PREFIX = 'reg_';
+const ALREADY_CALLBACK_PREFIX = 'already_';
 
 /** Минимальные типы для входящего Update от Telegram */
 interface TelegramUpdate {
@@ -43,6 +47,15 @@ interface TelegramUpdate {
     message?: { chat: { id: number }; message_id: number };
     data?: string;
   };
+}
+
+const MOSCOW_TZ = 'Europe/Moscow';
+
+/** Начало текущего дня (00:00) в Москве — для фильтрации прошедших мероприятий */
+function getStartOfTodayMoscow(): Date {
+  const now = new Date();
+  const moscowDateStr = now.toLocaleDateString('sv-SE', { timeZone: MOSCOW_TZ });
+  return new Date(`${moscowDateStr}T00:00:00+03:00`);
 }
 
 function formatEventDate(isoDate: string): string {
@@ -73,19 +86,45 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
   const body = req.body as TelegramUpdate;
 
-  // ——— Обработка нажатия inline-кнопки (регистрация на мероприятие) ———
+  // ——— Обработка нажатия inline-кнопки (регистрация или «уже зарегистрирован») ———
   if (body?.callback_query) {
     const cq = body.callback_query;
     const telegramId = cq.from?.id;
     const data = cq.data ?? '';
-    if (!telegramId || !data.startsWith(REG_CALLBACK_PREFIX)) {
+    const chatId = cq.message?.chat?.id ?? telegramId;
+    if (!telegramId) {
+      await answerCallbackQuery(cq.id, { text: 'Ошибка' });
+      res.sendStatus(200);
+      return;
+    }
+
+    // Кнопка «Вы зарегистрированы» — только сообщение, без повторной регистрации
+    if (data.startsWith(ALREADY_CALLBACK_PREFIX)) {
+      const eventId = data.slice(ALREADY_CALLBACK_PREFIX.length);
+      const { data: event } = await supabase
+        .from('events')
+        .select('title')
+        .eq('id', eventId)
+        .maybeSingle();
+      await answerCallbackQuery(cq.id, { text: 'Вы уже зарегистрированы' });
+      await sendTelegramMessage(
+        chatId,
+        event?.title
+          ? `Вы уже зарегистрированы на «${event.title}». Ждём вас! 🙂`
+          : 'Вы уже зарегистрированы на это мероприятие.',
+        { replyKeyboard: BOT_REPLY_KEYBOARD, parseMode: false }
+      );
+      res.sendStatus(200);
+      return;
+    }
+
+    if (!data.startsWith(REG_CALLBACK_PREFIX)) {
       await answerCallbackQuery(cq.id, { text: 'Неизвестная кнопка' });
       res.sendStatus(200);
       return;
     }
 
     const eventId = data.slice(REG_CALLBACK_PREFIX.length);
-    const chatId = cq.message?.chat?.id ?? telegramId;
 
     try {
       const { data: event, error: eventError } = await supabase
@@ -206,24 +245,52 @@ router.post('/webhook', async (req: Request, res: Response) => {
     return;
   }
 
-  // ——— Профиль: баланс и посещения ———
-  if (text === 'Профиль' || text === '/profile') {
-    const [profileRes, statsRes] = await Promise.all([
+  // ——— Профиль: баланс, посещения и текущая регистрация ———
+  if (text === 'Профиль' || text === '👤 Профиль' || text === '/profile') {
+    const [profileRes, statsRes, regRes] = await Promise.all([
       supabase.from('profiles').select('balance').eq('telegram_id', telegramId).maybeSingle(),
       supabase.from('user_stats').select('games_visited').eq('telegram_id', telegramId).maybeSingle(),
+      supabase
+        .from('registrations')
+        .select('event_id, registered_at')
+        .eq('telegram_id', telegramId)
+        .order('registered_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
     const balance = profileRes.data ? Number(profileRes.data.balance) ?? 0 : 0;
     const visits = statsRes.data ? Number(statsRes.data.games_visited) ?? 0 : 0;
+
+    let registrationLine: string;
+    if (regRes.data?.event_id) {
+      const { data: eventData } = await supabase
+        .from('events')
+        .select('id, title, event_date')
+        .eq('id', regRes.data.event_id)
+        .single();
+      const startOfToday = getStartOfTodayMoscow();
+      const isUpcoming =
+        eventData?.event_date && new Date(eventData.event_date) >= startOfToday;
+      if (isUpcoming && eventData?.title) {
+        registrationLine = `📋 <b>Текущая регистрация:</b> ${eventData.title}`;
+      } else {
+        registrationLine = `📋 <b>Текущая регистрация:</b> нет`;
+      }
+    } else {
+      registrationLine = `📋 <b>Текущая регистрация:</b> нет`;
+    }
+
     const reply =
       `💰 <b>Баланс:</b> ${balance} монет\n` +
-      `📅 <b>Посещений мероприятий:</b> ${visits}`;
+      `📅 <b>Посещений мероприятий:</b> ${visits}\n` +
+      registrationLine;
     await sendTelegramMessage(chatId, reply, { replyKeyboard: BOT_REPLY_KEYBOARD });
     res.sendStatus(200);
     return;
   }
 
-  // ——— Мероприятия: список предстоящих и кнопки регистрации ———
-  if (text === 'Мероприятия' || text === '/events') {
+  // ——— Мероприятия: список предстоящих, кнопка регистрации только если ещё не зареган ———
+  if (text === 'Мероприятия' || text === '📅 Мероприятия' || text === '/events') {
     const now = new Date().toISOString();
     const { data: events, error: eventsError } = await supabase
       .from('events')
@@ -241,13 +308,59 @@ router.post('/webhook', async (req: Request, res: Response) => {
       return;
     }
 
+    const eventIds = events.map((e) => e.id);
+    const { data: myRegs } = await supabase
+      .from('registrations')
+      .select('event_id')
+      .eq('telegram_id', telegramId)
+      .in('event_id', eventIds);
+    const registeredEventIds = new Set((myRegs ?? []).map((r) => r.event_id));
+
     const lines = events.map((e, i) => `${i + 1}. ${e.title} — ${formatEventDate(e.event_date)}`);
     const intro = '📅 <b>Предстоящие мероприятия:</b>\n\n' + lines.join('\n');
-    const inlineKeyboard = events.map((e) => [
-      { text: `Зарегистрироваться: ${e.title.slice(0, 30)}${e.title.length > 30 ? '…' : ''}`, callback_data: REG_CALLBACK_PREFIX + e.id },
-    ]);
+    const inlineKeyboard = events.map((e) => {
+      const isRegistered = registeredEventIds.has(e.id);
+      const shortTitle = e.title.slice(0, 28) + (e.title.length > 28 ? '…' : '');
+      return [
+        isRegistered
+          ? { text: `✓ Вы зарегистрированы: ${shortTitle}`, callback_data: ALREADY_CALLBACK_PREFIX + e.id }
+          : { text: `Зарегистрироваться: ${shortTitle}`, callback_data: REG_CALLBACK_PREFIX + e.id },
+      ];
+    });
 
     await sendTelegramMessage(chatId, intro, { inlineKeyboard });
+    res.sendStatus(200);
+    return;
+  }
+
+  // ——— Лавка удачи: подсказка и кнопка открыть приложение ———
+  if (text === 'Лавка удачи' || text === '🍀 Лавка удачи' || text === '/catalog') {
+    const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const message = '🍀 В <b>Лавке удачи</b> можно обменять монеты на товары. Откройте приложение и перейдите в раздел «Лавка удачи».';
+    if (appBaseUrl) {
+      await sendTelegramMessage(chatId, message, {
+        webAppButton: { text: 'Открыть Лавку удачи', url: `${appBaseUrl}/catalog` },
+      });
+      await sendTelegramMessage(chatId, ' ', { replyKeyboard: BOT_REPLY_KEYBOARD });
+    } else {
+      await sendTelegramMessage(chatId, message, { replyKeyboard: BOT_REPLY_KEYBOARD });
+    }
+    res.sendStatus(200);
+    return;
+  }
+
+  // ——— Награды: подсказка и кнопка открыть приложение ———
+  if (text === 'Награды' || text === '🏆 Награды' || text === '/achievements') {
+    const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const message = '🏆 В разделе <b>Награды</b> — достижения за посещения и покупки, а также монеты за призы. Откройте приложение.';
+    if (appBaseUrl) {
+      await sendTelegramMessage(chatId, message, {
+        webAppButton: { text: 'Открыть Награды', url: `${appBaseUrl}/achievements` },
+      });
+      await sendTelegramMessage(chatId, ' ', { replyKeyboard: BOT_REPLY_KEYBOARD });
+    } else {
+      await sendTelegramMessage(chatId, message, { replyKeyboard: BOT_REPLY_KEYBOARD });
+    }
     res.sendStatus(200);
     return;
   }

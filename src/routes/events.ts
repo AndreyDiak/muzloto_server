@@ -99,13 +99,13 @@ router.get('/my-registration', verifyTelegramAuth, async (req: AuthRequest, res:
 
     const { data: eventData } = await supabase
       .from('events')
-      .select('id, title')
+      .select('id, title, event_date')
       .eq('id', reg.event_id)
       .single();
 
     res.json({
       registration: {
-        event: eventData ? { id: eventData.id, title: eventData.title } : null,
+        event: eventData ? { id: eventData.id, title: eventData.title, event_date: eventData.event_date } : null,
         registered_at: reg.registered_at,
       },
     });
