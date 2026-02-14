@@ -599,15 +599,11 @@ router.post('/webhook', async (req: Request, res: Response) => {
     return;
   }
 
-  // ——— Ввести код: подсказка ———
+  // ——— Ввести код ———
   if (text === 'Ввести код' || text === '⌨️ Ввести код') {
-    await sendTelegramMessage(
-      chatId,
-      '⌨️ Введите <b>5 цифр</b> кода:\n\n' +
-        '• Код <b>мероприятия</b> — вы будете зарегистрированы на него.\n' +
-        '• Код <b>покупки</b> (Лавка удачи) — получите подтверждение и оформите покупку.',
-      { replyKeyboard: BOT_REPLY_KEYBOARD }
-    );
+    await sendTelegramMessage(chatId, 'Введите код из 5 цифр.', {
+      replyKeyboard: BOT_REPLY_KEYBOARD,
+    });
     res.sendStatus(200);
     return;
   }
