@@ -24,19 +24,22 @@ function requireRoot(req: AuthRequest, res: Response, next: NextFunction) {
   })();
 }
 
-/** Из тела запроса извлекает 5-символьный код: голый код, "shop-XXXXX" или URL с ?start=shop-XXXXX / ?startapp=shop-XXXXX */
+/** Из тела запроса извлекает 5-цифровой код: голый код, "shop-12345" или URL с ?start=shop-12345 */
 function normalizeCodeFromRequest(raw: unknown): string | null {
   const t = typeof raw === 'string' ? raw.trim() : '';
   if (!t) return null;
-  const upper = t.toUpperCase();
-  if (upper.length === 5 && /^[A-Z0-9]+$/.test(upper)) return upper;
-  if (t.length >= 10 && /^SHOP-[A-Z0-9]{5}$/i.test(t.slice(0, 10))) return t.slice(5, 10).toUpperCase();
+  const digits = t.replace(/\D/g, '');
+  if (digits.length === 5) return digits;
+  const shopMatch = t.match(/^shop-(\d{5})$/i);
+  if (shopMatch) return shopMatch[1];
   try {
     const url = new URL(t);
     const start = url.searchParams.get('start') ?? url.searchParams.get('startapp') ?? '';
     const startTrim = start.trim();
-    if (startTrim.length >= 10 && /^SHOP-[A-Z0-9]{5}$/i.test(startTrim.slice(0, 10))) return startTrim.slice(5, 10).toUpperCase();
-    if (startTrim.length === 5 && /^[A-Z0-9]+$/.test(startTrim)) return startTrim.toUpperCase();
+    const m = startTrim.match(/^shop-(\d{5})$/i);
+    if (m) return m[1];
+    const d = startTrim.replace(/\D/g, '');
+    if (d.length === 5) return d;
   } catch {
     // not a URL
   }
@@ -47,7 +50,7 @@ router.post('/scan', verifyTelegramAuth, requireRoot, async (req: AuthRequest, r
   try {
     const codeStr = normalizeCodeFromRequest(req.body?.code);
     if (!codeStr || codeStr.length !== 5) {
-      return res.status(400).json({ error: 'Неверный формат кода. Отсканируйте QR из приложения или введите 5 символов.' });
+      return res.status(400).json({ error: 'Неверный формат кода. Отсканируйте QR из приложения или введите 5 цифр.' });
     }
 
     const { data: row, error: fetchError } = await supabase

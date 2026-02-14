@@ -12,12 +12,22 @@
  */
 
 import { Request, Response, Router } from 'express';
+import {
+  VISIT_REWARD_COINS,
+  VISIT_REWARD_EVERY,
+  PURCHASE_ACHIEVEMENT_REWARDS,
+} from '../constants';
 import { applyVisitReward } from './events';
+import {
+  grantSinglePurchaseAchievementReward,
+} from '../services/achievements';
+import { incrementUserStat } from '../services/user-stats';
 import { supabase } from '../services/supabase';
 import {
   answerCallbackQuery,
   sendFormattedMessageToAdmin,
   sendTelegramMessage,
+  escapeHtml,
 } from '../services/telegram';
 
 const DEFAULT_REPLY = `Организаторы свяжутся с вами в ближайшее время!
@@ -27,10 +37,14 @@ const DEFAULT_REPLY = `Организаторы свяжутся с вами в 
 const BOT_REPLY_KEYBOARD = [
   ['👤 Профиль', '📅 Мероприятия'],
   ['🍀 Лавка удачи', '🏆 Награды'],
+  ['⌨️ Ввести код'],
 ];
 
 const REG_CALLBACK_PREFIX = 'reg_';
 const ALREADY_CALLBACK_PREFIX = 'already_';
+const CLAIM_VISIT_CALLBACK = 'claim_visit';
+const CLAIM_PURCHASE_PREFIX = 'claim_p_'; // claim_p_1, claim_p_3, claim_p_5
+const CONFIRM_PURCHASE_PREFIX = 'buy_'; // buy_12345 (5-digit code)
 
 /** Минимальные типы для входящего Update от Telegram */
 interface TelegramUpdate {
@@ -114,6 +128,156 @@ router.post('/webhook', async (req: Request, res: Response) => {
           : 'Вы уже зарегистрированы на это мероприятие.',
         { replyKeyboard: BOT_REPLY_KEYBOARD, parseMode: false }
       );
+      res.sendStatus(200);
+      return;
+    }
+
+    // ——— Забрать награду за посещения ———
+    if (data === CLAIM_VISIT_CALLBACK) {
+      try {
+        const { data: stats } = await supabase
+          .from('user_stats')
+          .select('games_visited, visit_rewards_claimed')
+          .eq('telegram_id', telegramId)
+          .single();
+        const every = VISIT_REWARD_EVERY;
+        const gamesVisited = stats?.games_visited ?? 0;
+        const visitRewardsClaimed = stats?.visit_rewards_claimed ?? 0;
+        const progress = gamesVisited - visitRewardsClaimed * every;
+        if (progress < every) {
+          await answerCallbackQuery(cq.id, { text: 'Нет доступной награды' });
+          res.sendStatus(200);
+          return;
+        }
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('balance')
+          .eq('telegram_id', telegramId)
+          .single();
+        if (!profile) {
+          await answerCallbackQuery(cq.id, { text: 'Ошибка' });
+          res.sendStatus(200);
+          return;
+        }
+        const newBalance = (Number(profile.balance) ?? 0) + VISIT_REWARD_COINS;
+        await Promise.all([
+          supabase.from('profiles').update({ balance: newBalance }).eq('telegram_id', telegramId),
+          supabase
+            .from('user_stats')
+            .update({ visit_rewards_claimed: visitRewardsClaimed + 1 })
+            .eq('telegram_id', telegramId),
+        ]);
+        await answerCallbackQuery(cq.id, { text: `+${VISIT_REWARD_COINS} монет!` });
+        await sendTelegramMessage(
+          chatId,
+          `✅ Награда за посещения получена: <b>+${VISIT_REWARD_COINS}</b> монет. Баланс: ${newBalance}`,
+          { replyKeyboard: BOT_REPLY_KEYBOARD }
+        );
+      } catch (e) {
+        console.error('[telegram-webhook] claim_visit error:', e);
+        await answerCallbackQuery(cq.id, { text: 'Ошибка' });
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ——— Забрать награду за покупки (1, 3 или 5) ———
+    if (data.startsWith(CLAIM_PURCHASE_PREFIX)) {
+      const thresholdStr = data.slice(CLAIM_PURCHASE_PREFIX.length);
+      const threshold = thresholdStr === '1' ? 1 : thresholdStr === '3' ? 3 : thresholdStr === '5' ? 5 : 0;
+      if (![1, 3, 5].includes(threshold)) {
+        await answerCallbackQuery(cq.id, { text: 'Неизвестная кнопка' });
+        res.sendStatus(200);
+        return;
+      }
+      try {
+        const result = await grantSinglePurchaseAchievementReward(telegramId, threshold as 1 | 3 | 5);
+        if (result.coinsAdded === 0) {
+          await answerCallbackQuery(cq.id, { text: 'Награда уже получена или недоступна' });
+          res.sendStatus(200);
+          return;
+        }
+        await answerCallbackQuery(cq.id, { text: `+${result.coinsAdded} монет!` });
+        await sendTelegramMessage(
+          chatId,
+          `✅ Награда получена: <b>+${result.coinsAdded}</b> монет. Баланс: ${result.newBalance ?? 0}`,
+          { replyKeyboard: BOT_REPLY_KEYBOARD }
+        );
+      } catch (e) {
+        console.error('[telegram-webhook] claim_purchase error:', e);
+        await answerCallbackQuery(cq.id, { text: 'Ошибка' });
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ——— Отмена покупки (cancel_12345) ———
+    if (data.startsWith('cancel_')) {
+      await answerCallbackQuery(cq.id, { text: 'Отменено' });
+      res.sendStatus(200);
+      return;
+    }
+
+    // ——— Подтверждение покупки по коду (buy_12345) ———
+    if (data.startsWith(CONFIRM_PURCHASE_PREFIX)) {
+      const code = data.slice(CONFIRM_PURCHASE_PREFIX.length);
+      if (code.length !== 5 || !/^\d+$/.test(code)) {
+        await answerCallbackQuery(cq.id, { text: 'Неверный код' });
+        res.sendStatus(200);
+        return;
+      }
+      try {
+        const { data: purchaseRow } = await supabase
+          .from('codes')
+          .select('id, catalog_item_id, used_at')
+          .eq('code', code)
+          .eq('type', 'purchase')
+          .maybeSingle();
+        if (!purchaseRow?.catalog_item_id || purchaseRow.used_at) {
+          await answerCallbackQuery(cq.id, { text: 'Код недействителен или уже использован' });
+          res.sendStatus(200);
+          return;
+        }
+        const { data: item } = await supabase
+          .from('catalog')
+          .select('id, name, description, price')
+          .eq('id', purchaseRow.catalog_item_id)
+          .single();
+        if (!item) {
+          await answerCallbackQuery(cq.id, { text: 'Товар не найден' });
+          res.sendStatus(200);
+          return;
+        }
+        const price = Number(item.price);
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('balance')
+          .eq('telegram_id', telegramId)
+          .single();
+        if (!profile || (Number(profile.balance) ?? 0) < price) {
+          await answerCallbackQuery(cq.id, { text: 'Недостаточно монет' });
+          res.sendStatus(200);
+          return;
+        }
+        const newBalance = (Number(profile.balance) ?? 0) - price;
+        await supabase.from('profiles').update({ balance: newBalance }).eq('telegram_id', telegramId);
+        await supabase
+          .from('codes')
+          .update({ used_at: new Date().toISOString(), owner_telegram_id: telegramId })
+          .eq('id', purchaseRow.id);
+        await incrementUserStat(telegramId, 'tickets_purchased');
+        const { checkAndUnlockAchievements } = await import('../services/achievements');
+        await checkAndUnlockAchievements(telegramId);
+        await answerCallbackQuery(cq.id, { text: 'Покупка оформлена!' });
+        await sendTelegramMessage(
+          chatId,
+          `✅ Покупка по коду оформлена!\n\nТовар: <b>${escapeHtml(item.name)}</b>\nЦена: ${price} монет\nОстаток: ${newBalance} монет`,
+          { replyKeyboard: BOT_REPLY_KEYBOARD }
+        );
+      } catch (e) {
+        console.error('[telegram-webhook] confirm_purchase error:', e);
+        await answerCallbackQuery(cq.id, { text: 'Ошибка оформления' });
+      }
       res.sendStatus(200);
       return;
     }
@@ -215,18 +379,19 @@ router.post('/webhook', async (req: Request, res: Response) => {
   const telegramId = message.from.id;
   console.log('[telegram-webhook] ЛС от', telegramId, message.from.username ?? '-', ':', text.slice(0, 50));
 
-  // ——— /start без параметров — приветствие и кнопки сразу при заходе в чат ———
+  // ——— /start без параметров — приветствие и кнопки ———
   if (text === '/start') {
-    await sendTelegramMessage(chatId, 'Привет! 👋 Выберите действие:', {
-      replyKeyboard: BOT_REPLY_KEYBOARD,
-      parseMode: false,
-    });
+    await sendTelegramMessage(
+      chatId,
+      'Привет! 👋 Выберите действие или введите <b>5 цифр</b> кода (мероприятие или покупка).',
+      { replyKeyboard: BOT_REPLY_KEYBOARD }
+    );
     res.sendStatus(200);
     return;
   }
 
-  // ——— /start shop-XXXXX — код покупки ———
-  const shopStartMatch = text.match(/^\/start\s+(shop-[A-Za-z0-9]{5})$/i);
+  // ——— /start shop-12345 — код покупки (5 цифр) ———
+  const shopStartMatch = text.match(/^\/start\s+(shop-\d{5})$/);
   if (shopStartMatch) {
     const payload = shopStartMatch[1];
     const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -333,34 +498,228 @@ router.post('/webhook', async (req: Request, res: Response) => {
     return;
   }
 
-  // ——— Лавка удачи: подсказка и кнопка открыть приложение ———
+  // ——— Лавка удачи: полный каталог в сообщении ———
   if (text === 'Лавка удачи' || text === '🍀 Лавка удачи' || text === '/catalog') {
+    const { data: items } = await supabase
+      .from('catalog')
+      .select('id, name, description, price')
+      .order('price', { ascending: true });
+
+    let body = '🍀 <b>Лавка удачи</b>\n\nТовары за монеты:\n\n';
+    if (items?.length) {
+      for (const item of items) {
+        const name = escapeHtml(item.name ?? '');
+        const desc = item.description?.trim()
+          ? '\n   ' + escapeHtml(item.description).replace(/\n/g, '\n   ')
+          : '';
+        body += `• <b>${name}</b> — ${Number(item.price) ?? 0} монет${desc}\n\n`;
+      }
+    } else {
+      body += 'Пока каталог пуст.\n\n';
+    }
+    body += 'Чтобы купить, получите код у организатора или в приложении и введите 5 цифр кода (кнопка «Ввести код» или просто отправьте код).';
+
+    await sendTelegramMessage(chatId, body, { replyKeyboard: BOT_REPLY_KEYBOARD });
     const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-    const message = '🍀 В <b>Лавке удачи</b> можно обменять монеты на товары. Откройте приложение и перейдите в раздел «Лавка удачи».';
     if (appBaseUrl) {
-      await sendTelegramMessage(chatId, message, {
-        webAppButton: { text: 'Открыть Лавку удачи', url: `${appBaseUrl}/catalog` },
+      await sendTelegramMessage(chatId, 'Открыть Лавку в приложении:', {
+        webAppButton: { text: 'Открыть приложение', url: `${appBaseUrl}/catalog` },
       });
       await sendTelegramMessage(chatId, ' ', { replyKeyboard: BOT_REPLY_KEYBOARD });
-    } else {
-      await sendTelegramMessage(chatId, message, { replyKeyboard: BOT_REPLY_KEYBOARD });
     }
     res.sendStatus(200);
     return;
   }
 
-  // ——— Награды: подсказка и кнопка открыть приложение ———
+  // ——— Награды: полный контент + кнопки «Забрать награду» ———
   if (text === 'Награды' || text === '🏆 Награды' || text === '/achievements') {
+    const { data: stats } = await supabase
+      .from('user_stats')
+      .select(
+        'games_visited, visit_rewards_claimed, tickets_purchased, purchase_reward_1_claimed_at, purchase_reward_3_claimed_at, purchase_reward_5_claimed_at'
+      )
+      .eq('telegram_id', telegramId)
+      .single();
+
+    const every = VISIT_REWARD_EVERY;
+    const gamesVisited = stats?.games_visited ?? 0;
+    const visitRewardsClaimed = stats?.visit_rewards_claimed ?? 0;
+    const visitProgress = gamesVisited - visitRewardsClaimed * every;
+    const visitRewardPending = visitProgress >= every;
+    const ticketsPurchased = stats?.tickets_purchased ?? 0;
+
+    const purchaseConfig = [
+      { threshold: 1, name: 'Первая покупка', badge: '🛒', key: 'purchase_reward_1_claimed_at' as const },
+      { threshold: 3, name: 'Три покупки', badge: '🛍️', key: 'purchase_reward_3_claimed_at' as const },
+      { threshold: 5, name: 'Пять покупок', badge: '⭐', key: 'purchase_reward_5_claimed_at' as const },
+    ];
+
+    let body = '🏆 <b>Награды</b>\n\n';
+    body += `📅 <b>Посещения:</b> ${gamesVisited}. Каждые ${every} — награда ${VISIT_REWARD_COINS} монет.\n`;
+    body += `   Прогресс: ${Math.min(visitProgress, every)}/${every}`;
+    if (visitRewardPending) body += ' — можно забрать!';
+    body += '\n\n';
+    body += '🛒 <b>Достижения за покупки:</b>\n';
+    for (const a of purchaseConfig) {
+      const claimed = stats?.[a.key];
+      const coins = PURCHASE_ACHIEVEMENT_REWARDS[a.threshold] ?? 0;
+      const done = ticketsPurchased >= a.threshold;
+      body += `   ${a.badge} ${a.name}: ${Math.min(ticketsPurchased, a.threshold)}/${a.threshold}`;
+      if (done) body += claimed ? ` — ✓ получено ${coins} монет` : ` — ${coins} монет, можно забрать!`;
+      body += '\n';
+    }
+
+    const inlineButtons: { text: string; callback_data: string }[] = [];
+    if (visitRewardPending) inlineButtons.push({ text: 'Забрать награду за посещения', callback_data: CLAIM_VISIT_CALLBACK });
+    for (const a of purchaseConfig) {
+      const claimed = stats?.[a.key];
+      if (ticketsPurchased >= a.threshold && !claimed) {
+        inlineButtons.push({
+          text: `Забрать награду: ${a.name}`,
+          callback_data: CLAIM_PURCHASE_PREFIX + a.threshold,
+        });
+      }
+    }
+
+    if (inlineButtons.length > 0) {
+      await sendTelegramMessage(chatId, body, {
+        inlineKeyboard: inlineButtons.map((b) => [b]),
+      });
+    } else {
+      await sendTelegramMessage(chatId, body, { replyKeyboard: BOT_REPLY_KEYBOARD });
+    }
     const appBaseUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-    const message = '🏆 В разделе <b>Награды</b> — достижения за посещения и покупки, а также монеты за призы. Откройте приложение.';
     if (appBaseUrl) {
-      await sendTelegramMessage(chatId, message, {
-        webAppButton: { text: 'Открыть Награды', url: `${appBaseUrl}/achievements` },
+      await sendTelegramMessage(chatId, 'Открыть раздел Награды в приложении:', {
+        webAppButton: { text: 'Открыть приложение', url: `${appBaseUrl}/achievements` },
       });
       await sendTelegramMessage(chatId, ' ', { replyKeyboard: BOT_REPLY_KEYBOARD });
-    } else {
-      await sendTelegramMessage(chatId, message, { replyKeyboard: BOT_REPLY_KEYBOARD });
     }
+    res.sendStatus(200);
+    return;
+  }
+
+  // ——— Ввести код: подсказка ———
+  if (text === 'Ввести код' || text === '⌨️ Ввести код') {
+    await sendTelegramMessage(
+      chatId,
+      '⌨️ Введите <b>5 цифр</b> кода:\n\n' +
+        '• Код <b>мероприятия</b> — вы будете зарегистрированы на него.\n' +
+        '• Код <b>покупки</b> (Лавка удачи) — получите подтверждение и оформите покупку.',
+      { replyKeyboard: BOT_REPLY_KEYBOARD }
+    );
+    res.sendStatus(200);
+    return;
+  }
+
+  // ——— Ручной ввод кода: 5 цифр — мероприятие или покупка ———
+  if (/^\d{5}$/.test(text)) {
+    const code = text;
+
+    // 1) Пробуем как код мероприятия (регистрация)
+    const { data: codeRow } = await supabase
+      .from('codes')
+      .select('event_id')
+      .eq('code', code)
+      .eq('type', 'registration')
+      .maybeSingle();
+
+    if (codeRow?.event_id) {
+      const { data: event } = await supabase
+        .from('events')
+        .select('id, title')
+        .eq('id', codeRow.event_id)
+        .single();
+      if (event) {
+        const { data: existing } = await supabase
+          .from('registrations')
+          .select('id')
+          .eq('event_id', event.id)
+          .eq('telegram_id', telegramId)
+          .maybeSingle();
+        if (existing) {
+          await sendTelegramMessage(
+            chatId,
+            `Вы уже зарегистрированы на «${escapeHtml(event.title)}».`,
+            { replyKeyboard: BOT_REPLY_KEYBOARD }
+          );
+          res.sendStatus(200);
+          return;
+        }
+        const { error: insertErr } = await supabase.from('registrations').insert({
+          event_id: event.id,
+          telegram_id: telegramId,
+          status: 'confirmed',
+        });
+        if (insertErr) {
+          await sendTelegramMessage(chatId, 'Не удалось зарегистрироваться. Попробуйте позже.', {
+            replyKeyboard: BOT_REPLY_KEYBOARD,
+            parseMode: false,
+          });
+          res.sendStatus(200);
+          return;
+        }
+        const result = await applyVisitReward(telegramId);
+        const coinsLine = result.coinsEarned > 0 ? ` За регистрацию начислено ${result.coinsEarned} монет.` : '';
+        await sendTelegramMessage(
+          chatId,
+          `✅ Вы зарегистрированы на «${escapeHtml(event.title)}».${coinsLine}`,
+          { replyKeyboard: BOT_REPLY_KEYBOARD }
+        );
+        res.sendStatus(200);
+        return;
+      }
+    }
+
+    // 2) Пробуем как код покупки (Лавка удачи)
+    const { data: purchaseRow } = await supabase
+      .from('codes')
+      .select('id, catalog_item_id, used_at')
+      .eq('code', code)
+      .eq('type', 'purchase')
+      .maybeSingle();
+
+    if (purchaseRow?.catalog_item_id && !purchaseRow.used_at) {
+      const { data: item } = await supabase
+        .from('catalog')
+        .select('id, name, price')
+        .eq('id', purchaseRow.catalog_item_id)
+        .single();
+      if (item) {
+        const price = Number(item.price);
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('balance')
+          .eq('telegram_id', telegramId)
+          .single();
+        const balance = Number(profile?.balance ?? 0);
+        if (balance < price) {
+          await sendTelegramMessage(
+            chatId,
+            `Товар «${escapeHtml(item.name)}» — ${price} монет. У вас ${balance} монет. Недостаточно для покупки.`,
+            { replyKeyboard: BOT_REPLY_KEYBOARD }
+          );
+          res.sendStatus(200);
+          return;
+        }
+        await sendTelegramMessage(chatId, `🛒 Вы покупаете: <b>${escapeHtml(item.name)}</b>\nЦена: ${price} монет\nБаланс: ${balance} монет`, {
+          inlineKeyboard: [
+            [
+              { text: 'Подтвердить покупку', callback_data: CONFIRM_PURCHASE_PREFIX + code },
+              { text: 'Отмена', callback_data: 'cancel_' + code },
+            ],
+          ],
+        });
+        res.sendStatus(200);
+        return;
+      }
+    }
+
+    // Код не найден ни как мероприятие, ни как покупка
+    await sendTelegramMessage(chatId, 'Код не найден или уже использован. Проверьте 5 цифр и попробуйте снова.', {
+      replyKeyboard: BOT_REPLY_KEYBOARD,
+      parseMode: false,
+    });
     res.sendStatus(200);
     return;
   }

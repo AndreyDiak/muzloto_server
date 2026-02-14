@@ -5,7 +5,6 @@ import { incrementUserStat } from '../services/user-stats';
 import { supabase } from '../services/supabase';
 import { sendTelegramMessage, escapeHtml } from '../services/telegram';
 
-const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const PURCHASE_CODE_LENGTH = 5;
 
 interface CatalogRow {
@@ -18,14 +17,10 @@ interface CatalogRow {
   updated_at: string;
 }
 
+/** Код покупки: 5 цифр (10000–99999) */
 function generatePurchaseCode(): string {
-  const bytes = new Uint8Array(PURCHASE_CODE_LENGTH);
-  crypto.getRandomValues(bytes);
-  let s = '';
-  for (let i = 0; i < PURCHASE_CODE_LENGTH; i++) {
-    s += CODE_CHARS[bytes[i] % CODE_CHARS.length];
-  }
-  return s;
+  const n = Math.floor(10000 + Math.random() * 90000);
+  return String(n);
 }
 
 const router = Router();
@@ -226,8 +221,8 @@ router.post(
 );
 
 function normalizePurchaseCode(input: string): string | null {
-  const t = (input ?? '').trim().toUpperCase();
-  if (t.length === 5 && /^[A-Z0-9]+$/.test(t)) return t;
+  const t = (input ?? '').trim().replace(/\D/g, '');
+  if (t.length === 5) return t;
   return null;
 }
 

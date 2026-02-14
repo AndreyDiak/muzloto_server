@@ -121,11 +121,13 @@ router.post('/validate-code', verifyTelegramAuth, async (req: AuthRequest, res: 
     const { code } = req.body;
     const telegramId = req.telegramId!;
 
-    if (!code || typeof code !== 'string' || code.length !== 5) {
-      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 символов.' });
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 цифр.' });
     }
-
-    const normalizedCode = code.toUpperCase();
+    const normalizedCode = code.trim().replace(/\D/g, '');
+    if (normalizedCode.length !== 5) {
+      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 цифр.' });
+    }
 
     if (normalizedCode === '00000') {
       return res.json({
@@ -182,11 +184,13 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
     const { code } = req.body as { code?: string };
     const telegramId = req.telegramId!;
 
-    if (!code || typeof code !== 'string' || code.length !== 5) {
-      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 символов.' });
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 цифр.' });
     }
-
-    const normalizedCode = code.toUpperCase();
+    const normalizedCode = code.trim().replace(/\D/g, '');
+    if (normalizedCode.length !== 5) {
+      return res.status(400).json({ error: 'Неверный формат кода. Код должен состоять из 5 цифр.' });
+    }
 
     if (normalizedCode === '00000') {
       const result = await applyVisitReward(telegramId);
