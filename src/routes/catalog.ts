@@ -181,9 +181,12 @@ router.post(
       }
 
       const telegramId = req.telegramId!;
-      const maxAttempts = 10;
+      const maxAttempts = 15;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const code = generatePurchaseCode();
+        const { data: existing } = await supabase.from('codes').select('id').eq('code', code).maybeSingle();
+        if (existing) continue;
+
         const { data: row, error: insertError } = await supabase
           .from('codes')
           .insert({

@@ -26,22 +26,46 @@ const router = Router();
 router.use(verifyTelegramAuth);
 router.use(requireRoot);
 
-/** Код мероприятия: 5 цифр (10000–99999) */
+/** Код мероприятия: только 5 цифр (10000–99999) */
 function generateEventCode(): string {
   const n = Math.floor(10000 + Math.random() * 90000);
   return String(n);
 }
 
-/** GET /api/admin/events — список мероприятий */
+function isFiveDigits(s: unknown): s is string {
+  return typeof s === 'string' && /^\d{5}$/.test(s);
+}
+
+/** GET /api/admin/events — список мероприятий (код берётся из codes) */
 router.get('/events', async (_req: AuthRequest, res: Response) => {
   try {
-    const { data, error } = await supabase
+    const { data: events, error } = await supabase
       .from('events')
-      .select('id, title, description, event_date, location, location_href, price, max_participants, code, created_at')
+      .select('id, title, description, event_date, location, location_href, price, max_participants, created_at')
       .order('event_date', { ascending: false });
 
     if (error) throw new Error(error.message);
-    res.json({ events: data ?? [] });
+    const list = events ?? [];
+    if (list.length === 0) {
+      res.json({ events: [] });
+      return;
+    }
+    const eventIds = list.map((e: { id: string }) => e.id);
+    const { data: codeRows } = await supabase
+      .from('codes')
+      .select('event_id, code')
+      .eq('type', 'registration')
+      .in('event_id', eventIds);
+    const codeByEventId = new Map(
+      (codeRows ?? [])
+        .filter((r: { code: unknown }) => isFiveDigits(r.code))
+        .map((r: { event_id: string; code: string }) => [r.event_id, r.code])
+    );
+    const eventsWithCode = list.map((e: Record<string, unknown> & { id: string }) => ({
+      ...e,
+      code: codeByEventId.get(e.id) ?? null,
+    }));
+    res.json({ events: eventsWithCode });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка загрузки';
     res.status(500).json({ error: message });
@@ -67,9 +91,10 @@ router.post('/events', async (req: AuthRequest, res: Response) => {
     }
 
     const eventDate = body.event_date && typeof body.event_date === 'string' ? body.event_date : new Date().toISOString();
+    // Код хранится только в таблице codes; уникальность по codes
     let code = generateEventCode();
     for (let attempt = 0; attempt < 30; attempt++) {
-      const { data: existing } = await supabase.from('events').select('id').eq('code', code).maybeSingle();
+      const { data: existing } = await supabase.from('codes').select('id').eq('code', code).maybeSingle();
       if (!existing) break;
       code = generateEventCode();
     }
@@ -84,9 +109,8 @@ router.post('/events', async (req: AuthRequest, res: Response) => {
         location_href: typeof body.location_href === 'string' ? body.location_href.trim() || null : null,
         price: typeof body.price === 'number' && body.price >= 0 ? body.price : 0,
         max_participants: typeof body.max_participants === 'number' && body.max_participants > 0 ? body.max_participants : null,
-        code,
       })
-      .select('id, title, code, event_date, created_at')
+      .select('id, title, event_date, created_at')
       .single();
 
     if (error) throw new Error(error.message);
@@ -95,7 +119,13 @@ router.post('/events', async (req: AuthRequest, res: Response) => {
       type: 'registration',
       event_id: inserted.id,
     }).then((r) => { if (r.error && r.error.code !== '23505') throw new Error(r.error.message); });
-    res.status(201).json(inserted);
+    res.status(201).json({
+      id: inserted.id,
+      title: inserted.title,
+      event_date: inserted.event_date,
+      created_at: inserted.created_at,
+      code,
+    });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка создания';
     res.status(500).json({ error: message });

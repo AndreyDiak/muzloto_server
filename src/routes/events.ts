@@ -159,7 +159,7 @@ router.post('/validate-code', verifyTelegramAuth, async (req: AuthRequest, res: 
 
     const { data: event, error: eventError } = await supabase
       .from('events')
-      .select('id, title, code, event_date')
+      .select('id, title, event_date')
       .eq('id', codeRow.event_id)
       .single();
 
@@ -234,7 +234,7 @@ router.post('/register', verifyTelegramAuth, async (req: AuthRequest, res: Respo
 
     const { data: event, error: eventError } = await supabase
       .from('events')
-      .select('id, title, code, event_date')
+      .select('id, title, event_date')
       .eq('id', codeRow.event_id)
       .single();
 
