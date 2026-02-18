@@ -3,21 +3,27 @@ import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth
 import { supabase } from '../services/supabase';
 
 const CATALOG_PHOTOS_BUCKET = 'catalog-photos';
-/** Обложки мероприятий лежат в catalog-photos с путём events/... */
+const EVENT_PHOTOS_BUCKET = 'event-photos';
+const OUR_BUCKETS = new Set([CATALOG_PHOTOS_BUCKET, EVENT_PHOTOS_BUCKET]);
 
 /**
- * Удаляет файл из storage по публичному URL, если URL относится к указанному бакету.
- * Формат URL: .../storage/v1/object/public/<bucket>/<path>
+ * Удаляет файл из storage по публичному URL (бакет и путь извлекаются из URL).
+ * Формат URL: .../object/public/<bucket>/<path>
+ * Поддерживает event-photos и catalog-photos.
  */
-async function removeStorageFileIfOurs(bucket: string, publicUrl: string | null): Promise<void> {
+async function removeStorageFileByUrl(publicUrl: string | null): Promise<void> {
   if (!publicUrl || typeof publicUrl !== 'string') return;
   const trimmed = publicUrl.trim();
-  const prefix = `/object/public/${bucket}/`;
+  const prefix = '/object/public/';
   const idx = trimmed.indexOf(prefix);
   if (idx === -1) return;
-  const path = trimmed.slice(idx + prefix.length).split('?')[0];
-  if (!path) return;
-  await supabase.storage.from(bucket).remove([path]);
+  const after = trimmed.slice(idx + prefix.length).split('?')[0];
+  const slash = after.indexOf('/');
+  if (slash === -1) return;
+  const urlBucket = after.slice(0, slash);
+  const path = after.slice(slash + 1);
+  if (!path || !OUR_BUCKETS.has(urlBucket)) return;
+  await supabase.storage.from(urlBucket).remove([path]);
 }
 
 const router = Router();
@@ -142,7 +148,7 @@ router.delete('/events/:id', async (req: AuthRequest, res: Response) => {
       .eq('id', id)
       .maybeSingle();
     if (event?.location_href) {
-      await removeStorageFileIfOurs(CATALOG_PHOTOS_BUCKET, event.location_href);
+      await removeStorageFileByUrl(event.location_href);
     }
     // Удаляем связанные записи (порядок важен из-за внешних ключей)
     await supabase.from('event_raffle_winners').delete().eq('event_id', id);
@@ -231,7 +237,7 @@ router.delete('/catalog/:id', async (req: AuthRequest, res: Response) => {
       .eq('id', id)
       .maybeSingle();
     if (item?.photo) {
-      await removeStorageFileIfOurs(CATALOG_PHOTOS_BUCKET, item.photo);
+      await removeStorageFileByUrl(item.photo);
     }
     const { error } = await supabase.from('catalog').delete().eq('id', id);
 
