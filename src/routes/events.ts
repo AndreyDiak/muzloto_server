@@ -4,7 +4,7 @@ import { RAFFLE_WINNER_COINS, REGISTRATION_REWARD } from '../constants';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
-import { sendTelegramMessage } from '../services/telegram';
+import { sendTelegramMessage, sendTelegramPhotoByUrl } from '../services/telegram';
 
 const router = Router();
 
@@ -374,7 +374,11 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const { eventId } = req.params;
-      const body = req.body as { telegram_ids?: number[] };
+      const body = req.body as {
+        telegram_ids?: number[];
+        text?: string;
+        photo_path?: string;
+      };
       const telegramIds = Array.isArray(body.telegram_ids)
         ? [...new Set(body.telegram_ids)].filter((id) => typeof id === 'number' && id > 0)
         : [];
@@ -392,20 +396,46 @@ router.post(
         return res.status(404).json({ error: 'Мероприятие не найдено.' });
       }
 
-      const dateStr = formatEventDateForAnnounce(event.event_date);
-      const placeStr = event.location?.trim() || 'место уточняется';
-      const message =
-        `🎤 Анонсируем новое мероприятие!\n\n` +
-        `${dateStr} в ${placeStr}.\n\n` +
-        `Будем петь тематические песни «${event.title}».\n\n` +
-        `Мы обязательно ждём именно тебя! 💙`;
+      const text = typeof body.text === 'string' && body.text.trim() ? body.text.trim() : null;
+      if (!text) {
+        return res.status(400).json({ error: 'Введите текст анонса.' });
+      }
+      const photoPath = typeof body.photo_path === 'string' ? body.photo_path.trim() : null;
+      let photoSignedUrl: string | null = null;
+      if (photoPath && !photoPath.includes('..')) {
+        const t0 = Date.now();
+        const { data: signed, error: signError } = await supabase.storage
+          .from('announce-photos')
+          .createSignedUrl(photoPath, 120);
+        const signedUrlMs = Date.now() - t0;
+        if (signError) {
+          console.warn('[broadcast-announce] createSignedUrl failed:', signError.message);
+        } else if (signed?.signedUrl) {
+          photoSignedUrl = signed.signedUrl;
+          console.log('[broadcast-announce] signedUrl created in', signedUrlMs, 'ms');
+        }
+      }
 
       let sent = 0;
       let failed = 0;
-      for (const telegramId of telegramIds) {
-        const ok = await sendTelegramMessage(telegramId, message, { parseMode: false });
-        if (ok) sent++;
-        else failed++;
+      const CONCURRENCY = 10;
+      const tSend = Date.now();
+      for (let i = 0; i < telegramIds.length; i += CONCURRENCY) {
+        const chunk = telegramIds.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          chunk.map((telegramId) =>
+            photoSignedUrl
+              ? sendTelegramPhotoByUrl(telegramId, photoSignedUrl, text, { parseMode: false })
+              : sendTelegramMessage(telegramId, text, { parseMode: false })
+          )
+        );
+        sent += results.filter(Boolean).length;
+        failed += results.filter((r) => !r).length;
+      }
+      console.log('[broadcast-announce] sendPhoto/sendMessage in', Date.now() - tSend, 'ms, recipients:', telegramIds.length);
+
+      if (photoPath) {
+        await supabase.storage.from('announce-photos').remove([photoPath]);
       }
 
       return res.json({

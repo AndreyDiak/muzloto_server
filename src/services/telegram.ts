@@ -91,6 +91,89 @@ export async function sendTelegramMessage(
 }
 
 /**
+ * Отправляет фото в личку с подписью (caption).
+ * photoBuffer — содержимое файла (JPEG/PNG и т.д.).
+ */
+export async function sendTelegramPhoto(
+  telegramId: number,
+  photoBuffer: Buffer,
+  caption: string,
+  options?: { parseMode?: 'HTML' | false }
+): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token?.trim()) {
+    console.warn('[telegram] TELEGRAM_BOT_TOKEN не задан, фото не отправлено');
+    return false;
+  }
+
+  try {
+    const form = new FormData();
+    form.set('chat_id', String(telegramId));
+    form.set('caption', caption);
+    form.append('photo', new Blob([photoBuffer]), 'photo.jpg');
+
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.warn('[telegram] sendPhoto failed:', res.status, err);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[telegram] sendPhoto error:', e);
+    return false;
+  }
+}
+
+/**
+ * Отправляет фото по URL — Telegram сам скачивает файл по ссылке.
+ * Используется для рассылки анонса: сервер не качает и не заливает файл, только передаёт URL.
+ */
+export async function sendTelegramPhotoByUrl(
+  telegramId: number,
+  photoUrl: string,
+  caption: string,
+  options?: { parseMode?: 'HTML' | false }
+): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token?.trim()) {
+    console.warn('[telegram] TELEGRAM_BOT_TOKEN не задан, фото не отправлено');
+    return false;
+  }
+
+  try {
+    const body: Record<string, unknown> = {
+      chat_id: telegramId,
+      photo: photoUrl,
+      caption,
+    };
+    if (options?.parseMode === false) {
+      body.parse_mode = undefined;
+    }
+
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.warn('[telegram] sendPhotoByUrl failed:', res.status, err);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[telegram] sendPhotoByUrl error:', e);
+    return false;
+  }
+}
+
+/**
  * Ответ на нажатие inline-кнопки (убирает «часики» и опционально показывает всплывающий текст).
  */
 export async function answerCallbackQuery(
