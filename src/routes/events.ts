@@ -4,7 +4,7 @@ import { RAFFLE_WINNER_COINS, REGISTRATION_REWARD } from '../constants';
 import { AuthRequest, requireRoot, verifyTelegramAuth } from '../middleware/auth';
 import { checkAndUnlockAchievements } from '../services/achievements';
 import { supabase } from '../services/supabase';
-import { sendTelegramMessage, sendTelegramPhotoByUrl } from '../services/telegram';
+import { escapeHtml, sendMessageToAdmin, sendTelegramMessage, sendTelegramPhotoByUrl } from '../services/telegram';
 
 const router = Router();
 
@@ -437,6 +437,16 @@ router.post(
       if (photoPath) {
         await supabase.storage.from('announce-photos').remove([photoPath]);
       }
+
+      const eventTitle = event.title ? escapeHtml(String(event.title)) : 'мероприятие';
+      const totalN = telegramIds.length;
+      const sentN = sent;
+      const failedN = failed;
+      const adminText =
+        failedN > 0
+          ? `📢 Рассылка анонса: отправлено <b>${sentN}</b> из <b>${totalN}</b> получателям по мероприятию «${eventTitle}». Не доставлено: ${failedN}.`
+          : `📢 Рассылка анонса: отправлено <b>${sentN}</b> из <b>${totalN}</b> получателям по мероприятию «${eventTitle}».`;
+      void sendMessageToAdmin(adminText);
 
       return res.json({
         total: telegramIds.length,

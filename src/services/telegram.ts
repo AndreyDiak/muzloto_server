@@ -265,3 +265,31 @@ export function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+/**
+ * Отправляет произвольное сообщение в админ-чат (для уведомлений, логов).
+ */
+export async function sendMessageToAdmin(text: string): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  if (!token?.trim() || !adminChatId?.trim()) return false;
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: adminChatId.trim(),
+        text,
+        parse_mode: 'HTML',
+      }),
+    });
+    if (!res.ok) {
+      console.warn('[telegram] sendMessageToAdmin failed:', res.status, await res.text());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[telegram] sendMessageToAdmin error:', e);
+    return false;
+  }
+}
